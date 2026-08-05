@@ -6,7 +6,7 @@ import logging
 import re
 from pathlib import Path
 from queue import Empty, Queue
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any, Callable, Iterator
 
 from hello_agents import HelloAgentsLLM, ToolAwareSimpleAgent
@@ -29,12 +29,21 @@ from services.tool_events import ToolCallTracker
 logger = logging.getLogger(__name__)
 
 
+class ResearchCancelledError(RuntimeError):
+    """Raised when a research job receives a cancellation request."""
+
+
 class DeepResearchAgent:
     """Coordinator orchestrating TODO-based research workflow using HelloAgents."""
 
-    def __init__(self, config: Configuration | None = None) -> None:
+    def __init__(
+        self,
+        config: Configuration | None = None,
+        cancel_event: Event | None = None,
+    ) -> None:
         """Initialise the coordinator with configuration and shared tools."""
         self.config = config or Configuration.from_env()
+        self.cancel_event = cancel_event or Event()
         self.llm = self._init_llm()
 
         self.note_tool = (
@@ -122,10 +131,16 @@ class DeepResearchAgent:
         self._tool_event_sink_enabled = sink is not None
         self._tool_tracker.set_event_sink(sink)
 
+    def _raise_if_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise ResearchCancelledError("研究任务已取消")
+
     def run(self, topic: str) -> SummaryStateOutput:
         """Execute the research workflow and return the final report."""
+        self._raise_if_cancelled()
         state = SummaryState(research_topic=topic)
         state.todo_items = self.planner.plan_todo_list(state)
+        self._raise_if_cancelled()
         self._drain_tool_events(state)
 
         if not state.todo_items:
@@ -133,8 +148,11 @@ class DeepResearchAgent:
             state.todo_items = [self.planner.create_fallback_task(state)]
 
         for task in state.todo_items:
-            self._execute_task(state, task, emit_stream=False)
+            self._raise_if_cancelled()
+            for _ in self._execute_task(state, task, emit_stream=False):
+                pass
 
+        self._raise_if_cancelled()
         report = self.reporting.generate_report(state)
         self._drain_tool_events(state)
         state.structured_report = report
@@ -149,11 +167,13 @@ class DeepResearchAgent:
 
     def run_stream(self, topic: str) -> Iterator[dict[str, Any]]:
         """Execute the workflow yielding incremental progress events."""
+        self._raise_if_cancelled()
         state = SummaryState(research_topic=topic)
         logger.debug("Starting streaming research: topic=%s", topic)
         yield {"type": "status", "message": "初始化研究流程"}
 
         state.todo_items = self.planner.plan_todo_list(state)
+        self._raise_if_cancelled()
         for event in self._drain_tool_events(state, step=0):
             yield event
         if not state.todo_items:
@@ -202,6 +222,7 @@ class DeepResearchAgent:
 
         def worker(task: TodoItem, step: int) -> None:
             try:
+                self._raise_if_cancelled()
                 enqueue(
                     {
                         "type": "task_status",
@@ -217,6 +238,16 @@ class DeepResearchAgent:
 
                 for event in self._execute_task(state, task, emit_stream=True, step=step):
                     enqueue(event, task=task)
+            except ResearchCancelledError:
+                enqueue(
+                    {
+                        "type": "task_status",
+                        "task_id": task.id,
+                        "status": "cancelled",
+                        "detail": "任务已取消",
+                    },
+                    task=task,
+                )
             except Exception as exc:  # pragma: no cover - defensive guardrail
                 logger.exception("Task execution failed", exc_info=exc)
                 enqueue(
@@ -246,7 +277,11 @@ class DeepResearchAgent:
 
         try:
             while finished_workers < active_workers:
-                event = event_queue.get()
+                self._raise_if_cancelled()
+                try:
+                    event = event_queue.get(timeout=0.25)
+                except Empty:
+                    continue
                 if event.get("type") == "__task_done__":
                     finished_workers += 1
                     continue
@@ -262,8 +297,9 @@ class DeepResearchAgent:
         finally:
             self._set_tool_event_sink(None)
             for thread in threads:
-                thread.join()
+                thread.join(timeout=0.1 if self.cancel_event.is_set() else None)
 
+        self._raise_if_cancelled()
         report = self.reporting.generate_report(state)
         final_step = len(state.todo_items) + 1
         for event in self._drain_tool_events(state, step=final_step):
@@ -295,6 +331,7 @@ class DeepResearchAgent:
         step: int | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Run search + summarization for a single task."""
+        self._raise_if_cancelled()
         task.status = "in_progress"
 
         search_result, notices, answer_text, backend = dispatch_search(
@@ -302,6 +339,7 @@ class DeepResearchAgent:
             self.config,
             state.research_loop_count,
         )
+        self._raise_if_cancelled()
         self._last_search_notices = notices
         task.notices = notices
 
@@ -377,6 +415,7 @@ class DeepResearchAgent:
                 for event in self._drain_tool_events(state, step=step):
                     yield event
                 for chunk in summary_stream:
+                    self._raise_if_cancelled()
                     if chunk:
                         yield {
                             "type": "task_summary_chunk",
@@ -390,9 +429,11 @@ class DeepResearchAgent:
             finally:
                 summary_text = summary_getter()
         else:
+            self._raise_if_cancelled()
             summary_text = self.summarizer.summarize_task(state, task, context)
             self._drain_tool_events(state)
 
+        self._raise_if_cancelled()
         task.summary = summary_text.strip() if summary_text else "暂无可用信息"
         task.status = "completed"
 

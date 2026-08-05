@@ -1,9 +1,10 @@
-const baseURL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const configuredBaseURL = import.meta.env.VITE_API_BASE_URL?.trim();
+const baseURL = configuredBaseURL || (import.meta.env.DEV ? "http://localhost:8000" : "");
 
 export interface ResearchRequest {
   topic: string;
   search_api?: string;
+  job_id: string;
 }
 
 export interface ResearchStreamEvent {
@@ -13,6 +14,19 @@ export interface ResearchStreamEvent {
 
 export interface StreamOptions {
   signal?: AbortSignal;
+}
+
+async function responseError(response: Response): Promise<string> {
+  const fallback = `研究请求失败，状态码：${response.status}`;
+  const text = await response.text().catch(() => "");
+  try {
+    const payload = JSON.parse(text) as { detail?: unknown };
+    return typeof payload.detail === "string" && payload.detail.trim()
+      ? payload.detail.trim()
+      : fallback;
+  } catch {
+    return text || fallback;
+  }
 }
 
 export async function runResearchStream(
@@ -31,10 +45,7 @@ export async function runResearchStream(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(
-      errorText || `研究请求失败，状态码：${response.status}`
-    );
+    throw new Error(await responseError(response));
   }
 
   const body = response.body;
@@ -62,7 +73,7 @@ export async function runResearchStream(
             const event = JSON.parse(dataPayload) as ResearchStreamEvent;
             onEvent(event);
 
-            if (event.type === "error" || event.type === "done") {
+            if (event.type === "error" || event.type === "cancelled" || event.type === "done") {
               return;
             }
           } catch (error) {
@@ -92,5 +103,14 @@ export async function runResearchStream(
       }
       break;
     }
+  }
+}
+
+export async function cancelResearchJob(jobId: string): Promise<void> {
+  const response = await fetch(`${baseURL}/research/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST"
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(await responseError(response));
   }
 }

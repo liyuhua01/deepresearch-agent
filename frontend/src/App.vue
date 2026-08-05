@@ -136,13 +136,21 @@
       <!-- 右侧：研究结果 -->
       <section
         class="panel panel-result"
-        v-if="todoTasks.length || reportMarkdown || progressLogs.length"
+        v-if="error || todoTasks.length || reportMarkdown || progressLogs.length"
       >
+        <p v-if="error" class="error-chip result-error" role="alert">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path
+              d="M10 3.2c-.3 0-.6.2-.8.5L3.4 15c-.4.7.1 1.6.8 1.6h11.6c.7 0 1.2-.9.8-1.6L10.8 3.7c-.2-.3-.5-.5-.8-.5Zm0 4.3c.4 0 .7.3.7.7v4c0 .4-.3.7-.7.7s-.7-.3-.7-.7V8.2c0-.4.3-.7.7-.7Zm0 6.6a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"
+            />
+          </svg>
+          <span><strong>研究未完成：</strong>{{ error }}</span>
+        </p>
         <header class="status-bar">
           <div class="status-main">
             <div class="status-chip" :class="{ active: loading }">
               <span class="dot"></span>
-              {{ loading ? "研究进行中" : "研究流程完成" }}
+              {{ loading ? "研究进行中" : error ? "研究失败" : "研究流程完成" }}
             </div>
             <span class="status-meta">
               任务进度：{{ completedTasks }} / {{ totalTasks || todoTasks.length || 1 }}
@@ -339,6 +347,7 @@
 import { computed, onBeforeUnmount, reactive, ref } from "vue";
 
 import {
+  cancelResearchJob,
   runResearchStream,
   type ResearchStreamEvent
 } from "./services/api";
@@ -397,6 +406,7 @@ const reportHighlight = ref(false);
 const toolHighlight = ref(false);
 
 let currentController: AbortController | null = null;
+const currentJobId = ref<string | null>(null);
 
 const searchOptions = [
   "advanced",
@@ -410,7 +420,9 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   pending: "待执行",
   in_progress: "进行中",
   completed: "已完成",
-  skipped: "已跳过"
+  skipped: "已跳过",
+  failed: "失败",
+  cancelled: "已取消"
 };
 
 function formatTaskStatus(status: string): string {
@@ -686,10 +698,16 @@ const handleSubmit = async () => {
 
   const controller = new AbortController();
   currentController = controller;
+  const jobId =
+    typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `job_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  currentJobId.value = jobId;
 
   const payload = {
     topic: form.topic.trim(),
-    search_api: form.searchApi || undefined
+    search_api: form.searchApi || undefined,
+    job_id: jobId
   };
 
   try {
@@ -811,6 +829,15 @@ const handleSubmit = async () => {
             }
           } else if (status === "skipped") {
             progressLogs.value.push(`任务跳过：${task.title}`);
+          } else if (status === "failed") {
+            const detail =
+              typeof event.detail === "string" && event.detail.trim()
+                ? event.detail.trim()
+                : "未返回具体原因";
+            error.value = `任务“${task.title}”失败：${detail}`;
+            progressLogs.value.push(`任务失败：${task.title}`);
+          } else if (status === "cancelled") {
+            progressLogs.value.push(`任务已取消：${task.title}`);
           }
           return;
         }
@@ -936,6 +963,12 @@ const handleSubmit = async () => {
               : "研究过程中发生错误";
           error.value = detail;
           progressLogs.value.push("研究失败，已停止流程");
+          return;
+        }
+
+        if (event.type === "cancelled") {
+          progressLogs.value.push("研究任务已由服务器取消");
+          error.value = "研究任务已取消";
         }
       },
       { signal: controller.signal }
@@ -949,20 +982,35 @@ const handleSubmit = async () => {
       progressLogs.value.push("已取消当前研究任务");
     } else {
       error.value = err instanceof Error ? err.message : "请求失败";
+      progressLogs.value.push("研究请求失败，详情见错误提示");
     }
   } finally {
     loading.value = false;
     if (currentController === controller) {
       currentController = null;
     }
+    if (currentJobId.value === jobId) {
+      currentJobId.value = null;
+    }
   }
 };
 
-const cancelResearch = () => {
+const cancelResearch = async () => {
   if (!loading.value || !currentController) {
     return;
   }
   progressLogs.value.push("正在尝试取消当前研究任务…");
+  const jobId = currentJobId.value;
+  if (jobId) {
+    try {
+      await cancelResearchJob(jobId);
+      progressLogs.value.push("服务器已收到取消请求");
+    } catch (err) {
+      progressLogs.value.push(
+        err instanceof Error ? `取消请求失败：${err.message}` : "取消请求失败"
+      );
+    }
+  }
   currentController.abort();
 };
 
@@ -1294,6 +1342,12 @@ select:focus {
   width: 18px;
   height: 18px;
   fill: currentColor;
+}
+
+.result-error {
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .panel-result {

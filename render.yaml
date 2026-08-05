@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: helloagents-deepresearch
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /readyz
+    autoDeployTrigger: commit
+    envVars:
+      - key: LLM_PROVIDER
+        value: custom
+      - key: LLM_MODEL_ID
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_TIMEOUT
+        value: "180"
+      - key: SEARCH_API
+        value: duckduckgo
+      - key: ENABLE_NOTES
+        value: "false"
+      - key: MAX_WEB_RESEARCH_LOOPS
+        value: "3"
+      - key: FETCH_FULL_PAGE
+        value: "true"
+      - key: APP_ACCESS_PASSWORD
+        sync: false
+      - key: RATE_LIMIT_REQUESTS
+        value: "5"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "3600"
+      - key: DAILY_RESEARCH_BUDGET
+        value: "20"

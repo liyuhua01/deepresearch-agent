@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Secrets and local environment overrides
+.env
+.env.*
+!.env.example
+
+# Python
+backend/.venv/
+backend/notes/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node.js / Vite
+frontend/node_modules/
+frontend/dist/
+
+# Editors
+.idea/
+.vscode/
+*.swp
