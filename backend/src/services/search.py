@@ -7,6 +7,11 @@ from typing import Any, Optional, Tuple
 
 from hello_agents.tools import SearchTool
 
+try:
+    from ddgs import DDGS
+except Exception:  # pragma: no cover - dependency is validated at runtime
+    DDGS = None  # type: ignore[assignment]
+
 from config import Configuration
 from utils import (
     deduplicate_and_format_sources,
@@ -18,6 +23,50 @@ logger = logging.getLogger(__name__)
 
 MAX_TOKENS_PER_SOURCE = 2000
 _GLOBAL_SEARCH_TOOL = SearchTool(backend="hybrid")
+
+
+def _ddgs_auto_fallback(query: str, *, max_results: int) -> dict[str, Any]:
+    """Search multiple public engines when the direct DDG backend is blocked."""
+
+    if DDGS is None:
+        raise RuntimeError("ddgs 未安装，无法启用多引擎搜索兜底")
+
+    try:
+        with DDGS(timeout=15) as client:
+            search_results = client.text(
+                query,
+                max_results=max_results,
+                backend="auto",
+                region="wt-wt",
+            )
+    except Exception as exc:
+        raise RuntimeError(f"多引擎搜索兜底失败: {exc}") from exc
+
+    results: list[dict[str, str]] = []
+    for entry in search_results:
+        url = entry.get("href") or entry.get("url")
+        title = entry.get("title") or url
+        if not url or not title:
+            continue
+        content = entry.get("body") or entry.get("content") or ""
+        results.append(
+            {
+                "title": str(title),
+                "url": str(url),
+                "content": str(content),
+                "raw_content": str(content),
+            }
+        )
+
+    if not results:
+        raise RuntimeError("多引擎搜索兜底未返回有效结果")
+
+    return {
+        "results": results,
+        "backend": "ddgs-auto",
+        "answer": None,
+        "notices": ["DuckDuckGo 直连无结果，已自动切换到多引擎搜索。"],
+    }
 
 
 def dispatch_search(
@@ -41,9 +90,18 @@ def dispatch_search(
                 "loop_count": loop_count,
             }
         )
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except Exception as exc:  # pragma: no cover - provider errors vary by network
         logger.exception("Search backend %s failed: %s", search_api, exc)
-        raise
+        if search_api != "duckduckgo":
+            raise
+        raw_response = _ddgs_auto_fallback(query, max_results=5)
+
+    if (
+        search_api == "duckduckgo"
+        and isinstance(raw_response, dict)
+        and not raw_response.get("results")
+    ):
+        raw_response = _ddgs_auto_fallback(query, max_results=5)
 
     if isinstance(raw_response, str):
         notices = [raw_response]

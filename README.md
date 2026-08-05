@@ -11,6 +11,7 @@
 - Vue 3 前端实时展示任务规划、检索来源、阶段总结和最终报告。
 - FastAPI（Python Web 接口框架）通过 SSE（服务器持续向浏览器推送事件）返回研究进度。
 - 支持 DuckDuckGo、Tavily、Perplexity、SearXNG 等检索来源。
+- DuckDuckGo 直连受限或无结果时，自动切换到 DDGS 多引擎公共搜索。
 - 支持 Ollama、LM Studio 和 OpenAI-compatible API（兼容 OpenAI 请求格式的模型服务）。
 - 单个 Docker 容器同时承载前端和后端，浏览器只访问一个公开地址。
 - 启动配置检查、基础访问密码、按 IP 限流、每日研究次数上限。
