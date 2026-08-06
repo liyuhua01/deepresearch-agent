@@ -14,6 +14,7 @@ from hello_agents.tools import ToolRegistry
 from hello_agents.tools.builtin.note_tool import NoteTool
 
 from config import Configuration
+from evaluation.instrumented_llm import InstrumentedLLM
 from evaluation.telemetry import RunRecorder
 from models import SummaryState, SummaryStateOutput, TodoItem
 from prompts import (
@@ -120,7 +121,12 @@ class DeepResearchAgent:
             if self.config.llm_api_key:
                 llm_kwargs["api_key"] = self.config.llm_api_key
 
-        return HelloAgentsLLM(**llm_kwargs)
+        return InstrumentedLLM(
+            **llm_kwargs,
+            recorder=self.recorder,
+            token_usage_fallback=self.config.token_usage_fallback,
+            stream_usage_mode=self.config.llm_stream_usage,
+        )
 
     def _create_tool_aware_agent(self, *, name: str, system_prompt: str) -> ToolAwareSimpleAgent:
         """Instantiate a ToolAwareSimpleAgent sharing tool registry and tracker."""

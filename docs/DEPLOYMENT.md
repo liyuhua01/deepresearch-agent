@@ -19,7 +19,21 @@
 
 `render.yaml` 默认选择新加坡区域、DuckDuckGo 检索、每 IP 每小时 5 次、整个服务每日 20 次研究。部署前可按模型成本调整。
 
-`ENABLE_RUN_TELEMETRY=true` 启用 Phase A 轻量运行埋点。它只在单次请求内存中记录配置、规划、搜索、总结、报告阶段耗时，以及子任务、搜索失败和降级恢复计数；不会增加新的 SSE 事件，不执行引用网络检查，也不会改变最终报告。若预发布验收发现埋点相关异常，可把该变量设为 `false`，立即恢复为无记录器的旧行为。
+`ENABLE_RUN_TELEMETRY=true` 启用运行埋点，记录配置、规划、搜索、总结、报告阶段耗时，以及子任务、搜索失败、降级恢复、LLM 调用和 Token 用量。`PERSIST_RUN_METRICS=true` 会在任务成功、失败或取消后，把单次结果原子写入 `RUN_METRICS_DIR`（默认 `backend/data/run_metrics`）下的 `<run_id>.json`。这些能力不会增加新的 SSE 事件，不执行引用网络检查，也不会改变最终报告。若预发布验收发现埋点相关异常，可把 `ENABLE_RUN_TELEMETRY` 设为 `false`，立即恢复为无记录器的旧行为。
+
+`TOKEN_USAGE_FALLBACK=unavailable` 表示供应商未返回 Token 时明确记为不可获得；只有主动改成 `estimated` 才会使用 `tiktoken`（分词器：把模型输入输出近似切分为 Token）估算。`LLM_STREAM_USAGE=auto` 仅对已知支持该参数的流式接口请求真实 usage。费用不会猜测：只有配置 `MODEL_PRICING_FILE` 且模型名精确匹配时才计算。例如：
+
+```json
+{
+  "currency": "USD",
+  "models": {
+    "your-model-name": {
+      "input_per_million_tokens": 0.5,
+      "output_per_million_tokens": 1.5
+    }
+  }
+}
+```
 
 ## 上线验收
 
@@ -33,10 +47,13 @@
 - 检查仓库和构建日志没有打印 API Key。
 - 对比升级前后的 SSE 事件类型，确认 Phase A 没有新增、删除或重命名事件。
 - 分别验证正常完成、模型错误和用户取消；三种路径的页面行为应与升级前一致。
+- 检查三种路径都生成 `<run_id>.json`，且文件中不含 API Key、完整 Prompt、网页正文或最终报告。
 
 ## 免费层与费用
 
 Render 官方说明：Free Web Service 可免费用于预览和业余项目，但不应当作生产环境。服务连续 15 分钟无入站流量会休眠，下一次请求重新唤醒可能等待约一分钟；本地文件在重启、重新部署或休眠时会丢失。每个 workspace（Render 工作空间）每月包含 750 个免费实例小时，带宽和构建分钟也受月度额度约束。
+
+因此 JSON 持久化在本地开发和单次预发布验收中是真实可用的证据文件，但 Render Free 的本地盘不是长期存储。需要跨重启保留历史指标时，应把同一个 JSON 数据契约接到 PostgreSQL 或对象存储，不能把当前目录宣传为永久数据库。
 
 参考：
 

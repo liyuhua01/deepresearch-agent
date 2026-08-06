@@ -47,6 +47,9 @@ class RuntimeSettings:
     daily_research_budget: int
     frontend_dist_dir: Path
     enable_run_telemetry: bool
+    persist_run_metrics: bool
+    run_metrics_dir: Path
+    model_pricing_file: Path | None
 
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
@@ -54,6 +57,13 @@ class RuntimeSettings:
         frontend_dir = Path(
             os.getenv("FRONTEND_DIST_DIR", str(project_root / "frontend" / "dist"))
         ).expanduser()
+        metrics_dir = Path(
+            os.getenv(
+                "RUN_METRICS_DIR",
+                str(project_root / "backend" / "data" / "run_metrics"),
+            )
+        ).expanduser()
+        pricing_file_value = os.getenv("MODEL_PRICING_FILE", "").strip()
         origins = tuple(
             origin.strip()
             for origin in os.getenv(
@@ -70,6 +80,11 @@ class RuntimeSettings:
             daily_research_budget=_positive_int("DAILY_RESEARCH_BUDGET", 20),
             frontend_dist_dir=frontend_dir,
             enable_run_telemetry=_boolean("ENABLE_RUN_TELEMETRY", True),
+            persist_run_metrics=_boolean("PERSIST_RUN_METRICS", True),
+            run_metrics_dir=metrics_dir,
+            model_pricing_file=(
+                Path(pricing_file_value).expanduser() if pricing_file_value else None
+            ),
         )
 
 

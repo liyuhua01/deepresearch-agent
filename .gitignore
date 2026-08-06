@@ -9,6 +9,7 @@
 # Python
 backend/.venv/
 backend/notes/
+backend/data/run_metrics/
 **/__pycache__/
 *.py[cod]
 .pytest_cache/

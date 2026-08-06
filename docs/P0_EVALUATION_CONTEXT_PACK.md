@@ -1,6 +1,6 @@
 # Deep Research Agent P0 评测链路 Context Pack
 
-> 状态：设计冻结；Phase A 已实现，等待预发布 Render 验收
+> 状态：设计冻结；Phase A 已通过预发布验收；Phase B 已完成本地实现与回归，等待预发布验收
 >
 > 适用范围：运行埋点、自动引用检查、固定评测执行器
 >
@@ -179,6 +179,16 @@ final_report -> metrics -> done
 
 若指标序列化失败：记录服务端日志并继续发送原有 `done` 或 `error`，不得破坏原研究结果。
 
+### 3.7 本地 JSON 持久化
+
+任务首次进入 `completed`、`failed` 或 `cancelled` 终态时，将当前快照写入 `RUN_METRICS_DIR/<run_id>.json`：
+
+- 使用同目录临时文件、`fsync` 和原子替换，读取方不会看到半份 JSON。
+- 文件权限设为 `0600`，文件名只接受安全的 `run_id` 字符。
+- 写盘失败采用 fail-open，只增加 warning，不改变报告、异常或取消行为。
+- 不保存 API Key、Authorization Header、完整 Prompt、抓取正文和最终报告。
+- Render Free 本地文件会随重启或重新部署丢失；该层用于本地/预发布证据，长期历史需要外部数据库或对象存储。
+
 ## 4. 自动引用检查设计
 
 ### 4.1 运行位置
@@ -347,9 +357,12 @@ warnings
 | 变量 | 默认值 | 作用 |
 |---|---:|---|
 | `ENABLE_RUN_TELEMETRY` | `true` | 收集轻量运行指标 |
+| `PERSIST_RUN_METRICS` | `true` | 终态时原子写入单次 JSON |
+| `RUN_METRICS_DIR` | `backend/data/run_metrics` | 本地指标目录 |
 | `EMIT_METRICS_EVENT` | `false` | 是否向 SSE 客户端发送指标事件 |
 | `ENABLE_INLINE_CITATION_AUDIT` | `false` | 在线请求是否执行网络引用检查 |
 | `TOKEN_USAGE_FALLBACK` | `unavailable` | usage 缺失时不默认做不可靠估算 |
+| `LLM_STREAM_USAGE` | `auto` | 仅为已知兼容端点请求流式 usage |
 | `MODEL_PRICING_FILE` | 空 | 未配置时不计算费用 |
 
 任一评测模块异常时采用 fail-open（开放式降级：评测失败但原业务继续运行）：
@@ -365,7 +378,7 @@ CSV 汇总失败 -> 保留逐次 JSON -> 不重新消耗模型运行
 
 ### Phase A：只增加运行记录器
 
-实施状态（2026-08-06）：已完成代码接入。新增记录器保持在请求内存中，不发送 `metrics` SSE 事件；原始研究输出、取消和错误事件保持兼容。进入 Phase B 前仍需完成预发布 Render 验收。
+实施状态（2026-08-06）：已完成代码接入并通过独立 Render 预发布验收。记录器不发送 `metrics` SSE 事件；原始研究输出、取消和错误事件保持兼容。
 
 改动范围：数据模型、阶段计时、失败阶段、子任务和搜索计数。不开启 SSE 指标事件，不做引用网络请求。
 
@@ -377,6 +390,8 @@ CSV 汇总失败 -> 保留逐次 JSON -> 不重新消耗模型运行
 - 使用假的 LLM / 搜索依赖完成一次确定性运行，原事件序列不变。
 
 ### Phase B：增加 LLM usage
+
+实施状态（2026-08-06）：已完成本地代码、JSON 原子持久化和专项回归。31 项后端测试通过；真实、估算、不可用 usage 以及流式输出兼容均有自动测试。尚未部署到公开生产服务，需先完成预发布验收。
 
 改动范围：模型包装与 usage 统计。保持 Agent 调用接口和文本结果不变。
 

@@ -1,6 +1,6 @@
 import os
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -86,6 +86,14 @@ class Configuration(BaseModel):
         title="LLM Model ID",
         description="Optional model identifier for custom OpenAI-compatible services",
     )
+    token_usage_fallback: Literal["unavailable", "estimated"] = Field(
+        default="unavailable",
+        description="Fallback when the provider does not return token usage",
+    )
+    llm_stream_usage: Literal["auto", "enabled", "disabled"] = Field(
+        default="auto",
+        description="Whether to request usage metadata in streaming responses",
+    )
 
     @classmethod
     def from_env(cls, overrides: Optional[dict[str, Any]] = None) -> "Configuration":
@@ -115,6 +123,8 @@ class Configuration(BaseModel):
             "search_api": os.getenv("SEARCH_API"),
             "enable_notes": os.getenv("ENABLE_NOTES"),
             "notes_workspace": os.getenv("NOTES_WORKSPACE"),
+            "token_usage_fallback": os.getenv("TOKEN_USAGE_FALLBACK"),
+            "llm_stream_usage": os.getenv("LLM_STREAM_USAGE"),
         }
 
         for key, value in env_aliases.items():
@@ -140,4 +150,3 @@ class Configuration(BaseModel):
         """Best-effort resolution of the model identifier to use."""
 
         return self.llm_model_id or self.local_llm
-

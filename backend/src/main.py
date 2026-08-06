@@ -22,6 +22,8 @@ from pydantic import BaseModel, Field
 
 from agent import DeepResearchAgent, ResearchCancelledError
 from config import Configuration, SearchAPI
+from evaluation.persistence import RunMetricsStore
+from evaluation.pricing import load_pricing_catalog
 from evaluation.telemetry import RunRecorder
 from runtime import (
     ResearchGate,
@@ -43,6 +45,13 @@ logger.add(
 
 runtime_settings = RuntimeSettings.from_env()
 research_gate = ResearchGate(runtime_settings)
+run_metrics_store = RunMetricsStore(
+    runtime_settings.run_metrics_dir,
+    enabled=runtime_settings.persist_run_metrics,
+)
+pricing_catalog, pricing_warning = load_pricing_catalog(
+    runtime_settings.model_pricing_file
+)
 active_jobs: dict[str, Event] = {}
 active_jobs_lock = Lock()
 
@@ -81,6 +90,25 @@ def _build_config(payload: ResearchRequest) -> Configuration:
     if payload.search_api is not None:
         overrides["search_api"] = payload.search_api
     return Configuration.from_env(overrides=overrides)
+
+
+def _new_recorder(payload: ResearchRequest) -> RunRecorder:
+    """Create one recorder wired to the local terminal-artifact store."""
+
+    search_api = payload.search_api.value if payload.search_api else os.getenv(
+        "SEARCH_API", SearchAPI.DUCKDUCKGO.value
+    )
+    return RunRecorder(
+        run_id=payload.job_id,
+        topic=payload.topic,
+        enabled=runtime_settings.enable_run_telemetry,
+        model=os.getenv("LLM_MODEL_ID") or os.getenv("LOCAL_LLM"),
+        search_api=search_api,
+        git_commit=os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT"),
+        persist_callback=run_metrics_store.persist,
+        pricing_catalog=pricing_catalog,
+        initial_warnings=(pricing_warning,) if pricing_warning else (),
+    )
 
 
 def _client_id(request: Request) -> str:
@@ -215,11 +243,7 @@ def create_app() -> FastAPI:
 
     @app.post("/research", response_model=ResearchResponse)
     def run_research(payload: ResearchRequest, request: Request) -> ResearchResponse:
-        recorder = RunRecorder(
-            run_id=payload.job_id,
-            topic=payload.topic,
-            enabled=runtime_settings.enable_run_telemetry,
-        )
+        recorder = _new_recorder(payload)
         try:
             with recorder.stage("configuration"):
                 config = _validated_config(payload)
@@ -271,11 +295,7 @@ def create_app() -> FastAPI:
 
     @app.post("/research/stream")
     def stream_research(payload: ResearchRequest, request: Request) -> StreamingResponse:
-        recorder = RunRecorder(
-            run_id=payload.job_id,
-            topic=payload.topic,
-            enabled=runtime_settings.enable_run_telemetry,
-        )
+        recorder = _new_recorder(payload)
         try:
             with recorder.stage("configuration"):
                 config = _validated_config(payload)

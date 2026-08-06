@@ -115,7 +115,12 @@ npm run dev
 | `RATE_LIMIT_WINDOW_SECONDS` | 限流窗口秒数 | 否，默认 3600 |
 | `DAILY_RESEARCH_BUDGET` | 整个实例每日最多研究次数 | 否，默认 20 |
 | `MAX_WEB_RESEARCH_LOOPS` | 一次研究的最大检索轮数 | 否，默认 3 |
-| `ENABLE_RUN_TELEMETRY` | 启用轻量运行埋点；只在内存记录阶段、任务和搜索指标，不改变前端事件 | 否，默认 `true` |
+| `ENABLE_RUN_TELEMETRY` | 启用阶段、任务、搜索和 LLM 用量埋点，不改变前端事件 | 否，默认 `true` |
+| `PERSIST_RUN_METRICS` | 成功、失败、取消后原子写入单次 JSON | 否，默认 `true` |
+| `RUN_METRICS_DIR` | 本地 JSON 指标目录 | 否，默认 `backend/data/run_metrics` |
+| `TOKEN_USAGE_FALLBACK` | usage 缺失时使用 `unavailable` 或显式 `estimated` | 否，默认 `unavailable` |
+| `LLM_STREAM_USAGE` | 是否向兼容端点请求流式 Token usage | 否，默认 `auto` |
+| `MODEL_PRICING_FILE` | 可选模型价格 JSON；未配置时费用为 `null` | 否 |
 
 服务暴露两个运维接口：`/healthz` 只检查进程是否存活；`/readyz` 检查必要配置并返回当日剩余额度。密钥不会写入镜像或提交到 Git。
 

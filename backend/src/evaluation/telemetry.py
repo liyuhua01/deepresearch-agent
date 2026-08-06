@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from threading import Lock, local
@@ -11,6 +11,7 @@ from typing import Any
 
 Clock = Callable[[], float]
 WallClock = Callable[[], datetime]
+PersistCallback = Callable[[Mapping[str, Any]], Any]
 
 
 def _utc_now() -> datetime:
@@ -20,7 +21,7 @@ def _utc_now() -> datetime:
 class RunRecorder:
     """Collect metrics without becoming a dependency of the research result."""
 
-    schema_version = "1.0"
+    schema_version = "1.1"
 
     def __init__(
         self,
@@ -28,12 +29,23 @@ class RunRecorder:
         run_id: str,
         topic: str,
         enabled: bool = True,
+        model: str | None = None,
+        search_api: str | None = None,
+        git_commit: str | None = None,
+        persist_callback: PersistCallback | None = None,
+        pricing_catalog: Any | None = None,
+        initial_warnings: tuple[str, ...] = (),
         clock: Clock = perf_counter,
         wall_clock: WallClock = _utc_now,
     ) -> None:
         self.run_id = run_id
         self.topic = topic
         self.enabled = enabled
+        self.model = model
+        self.search_api = search_api
+        self.git_commit = git_commit
+        self._persist_callback = persist_callback
+        self._pricing_catalog = pricing_catalog
         self._clock = clock
         self._wall_clock = wall_clock
         self._lock = Lock()
@@ -61,7 +73,13 @@ class RunRecorder:
         self._search_empty_results = 0
         self._fallback_triggers = 0
         self._fallback_successes = 0
-        self._warnings: list[str] = []
+        self._llm_calls = 0
+        self._llm_failures = 0
+        self._llm_usage_sources: list[str] = []
+        self._prompt_tokens = 0
+        self._completion_tokens = 0
+        self._total_tokens = 0
+        self._warnings: list[str] = list(dict.fromkeys(initial_warnings))
 
     @contextmanager
     def stage(self, name: str, *, task_id: str | int | None = None) -> Iterator[None]:
@@ -150,6 +168,43 @@ class RunRecorder:
         if success:
             self._increment("_fallback_successes")
 
+    def record_llm_call(self) -> None:
+        """Count one attempted LLM request."""
+
+        self._increment("_llm_calls")
+
+    def record_llm_failure(self) -> None:
+        """Count one LLM request that raised an exception."""
+
+        self._increment("_llm_failures")
+
+    def record_llm_usage(
+        self,
+        *,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int | None = None,
+        source: str,
+    ) -> None:
+        """Record provider-reported or explicitly estimated token usage."""
+
+        if not self.enabled:
+            return
+        try:
+            normalized_source = str(source).strip().lower()
+            if normalized_source not in {"provider", "estimated"}:
+                raise ValueError("unsupported usage source")
+            prompt = max(0, int(prompt_tokens))
+            completion = max(0, int(completion_tokens))
+            total = max(prompt + completion, int(total_tokens or 0))
+            with self._lock:
+                self._prompt_tokens += prompt
+                self._completion_tokens += completion
+                self._total_tokens += total
+                self._llm_usage_sources.append(normalized_source)
+        except Exception as exc:
+            self.add_warning(f"llm_usage_metric_failed:{type(exc).__name__}")
+
     def mark_completed(self) -> None:
         """Finalize the run as completed."""
 
@@ -207,10 +262,15 @@ class RunRecorder:
                 key: round(value)
                 for key, value in sorted(self._stage_durations_ms.items())
             }
+            has_token_usage = bool(self._llm_usage_sources)
+            estimated_cost, cost_currency = self._estimated_cost()
             return {
                 "schema_version": self.schema_version,
                 "run_id": self.run_id,
                 "topic": self.topic,
+                "model": self.model,
+                "search_api": self.search_api,
+                "git_commit": self.git_commit,
                 "started_at": self._isoformat(self._started_at),
                 "finished_at": self._isoformat(self._finished_at),
                 "status": self._status,
@@ -232,6 +292,17 @@ class RunRecorder:
                 "search_empty_results": self._search_empty_results,
                 "fallback_triggers": self._fallback_triggers,
                 "fallback_successes": self._fallback_successes,
+                "llm_calls": self._llm_calls,
+                "llm_failures": self._llm_failures,
+                "llm_usage_recorded_calls": len(self._llm_usage_sources),
+                "prompt_tokens": self._prompt_tokens if has_token_usage else None,
+                "completion_tokens": (
+                    self._completion_tokens if has_token_usage else None
+                ),
+                "total_tokens": self._total_tokens if has_token_usage else None,
+                "usage_source": self._usage_source(),
+                "estimated_cost": estimated_cost,
+                "cost_currency": cost_currency,
                 "metrics_complete": not self._warnings,
                 "warnings": list(self._warnings),
             }
@@ -279,8 +350,40 @@ class RunRecorder:
                 self._failure_stage = failure_stage
                 self._failure_type = failure_type
                 self._failure_message = failure_message
+            self._persist_terminal_snapshot()
         except Exception as exc:  # pragma: no cover - defensive fail-open path
             self.add_warning(f"run_finish_failed:{type(exc).__name__}")
+
+    def _persist_terminal_snapshot(self) -> None:
+        if self._persist_callback is None:
+            return
+        try:
+            self._persist_callback(self.snapshot())
+        except Exception as exc:
+            self.add_warning(f"metrics_persistence_failed:{type(exc).__name__}")
+
+    def _usage_source(self) -> str:
+        sources = set(self._llm_usage_sources)
+        if not sources:
+            return "unavailable"
+        successful_calls = max(0, self._llm_calls - self._llm_failures)
+        if len(self._llm_usage_sources) < successful_calls:
+            return "mixed"
+        if len(sources) == 1:
+            return next(iter(sources))
+        return "mixed"
+
+    def _estimated_cost(self) -> tuple[float | None, str | None]:
+        if self._pricing_catalog is None or not self._llm_usage_sources:
+            return None, None
+        try:
+            return self._pricing_catalog.estimate(
+                model=self.model,
+                prompt_tokens=self._prompt_tokens,
+                completion_tokens=self._completion_tokens,
+            )
+        except Exception:
+            return None, None
 
     def _safe_clock(self) -> float | None:
         try:

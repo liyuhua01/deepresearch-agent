@@ -124,3 +124,27 @@ def test_cancelled_run_has_a_terminal_record() -> None:
     assert metrics["status"] == "cancelled"
     assert metrics["failure_stage"] == "summarization"
     assert metrics["failure_type"] is None
+
+
+def test_llm_usage_aggregation_is_thread_safe() -> None:
+    recorder = _recorder()
+
+    def record_usage(_index: int) -> None:
+        recorder.record_llm_call()
+        recorder.record_llm_usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            source="provider",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(record_usage, range(100)))
+
+    metrics = recorder.snapshot()
+    assert metrics["llm_calls"] == 100
+    assert metrics["llm_usage_recorded_calls"] == 100
+    assert metrics["prompt_tokens"] == 1000
+    assert metrics["completion_tokens"] == 500
+    assert metrics["total_tokens"] == 1500
+    assert metrics["usage_source"] == "provider"
