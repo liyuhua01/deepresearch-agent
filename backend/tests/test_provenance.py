@@ -162,6 +162,28 @@ def test_search_ranking_prefers_authoritative_relevant_and_diverse_sources() -> 
     assert len(ranked["results"]) == 3
 
 
+def test_search_ranking_drops_irrelevant_noise_when_relevant_results_exist() -> None:
+    ranked = rank_search_results(
+        {
+            "results": [
+                {
+                    "title": "asyncio event loop",
+                    "url": "https://docs.python.org/3/library/asyncio.html",
+                },
+                {
+                    "title": "Greek Peak lift tickets",
+                    "url": "https://www.greekpeak.net/lift-tickets/",
+                },
+            ]
+        },
+        relevance_text="Python asyncio network concurrency",
+    )
+
+    assert [item["url"] for item in ranked["results"]] == [
+        "https://docs.python.org/3/library/asyncio.html"
+    ]
+
+
 def test_bare_source_tokens_expand_to_clickable_links_without_touching_unknowns() -> (
     None
 ):

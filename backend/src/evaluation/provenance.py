@@ -377,6 +377,11 @@ def rank_search_results(
         ranked.append((score, index, domain, dict(item)))
 
     ranked.sort(key=lambda entry: (-entry[0], entry[1]))
+    # Once at least one lexically relevant candidate exists, unrelated search
+    # noise is evidence we should exclude rather than merely rank lower.
+    relevant_ranked = [entry for entry in ranked if entry[0] >= 5]
+    if relevant_ranked:
+        ranked = relevant_ranked
     selected: list[dict[str, Any]] = []
     domain_counts: dict[str, int] = {}
     for _, _, domain, item in ranked:

@@ -181,6 +181,7 @@ def _enhance_provenance_search(
     """Add one bounded authoritative-source search, then rank the merged pool."""
     search_api = get_config_value(config.search_api)
     supplemental_query = _build_authoritative_query(query)
+    expected_official_domain = _official_domain_for_query(query)
     notices = list(payload.get("notices") or [])
     supplemental_results: list[dict[str, Any]] = []
     if recorder:
@@ -212,6 +213,41 @@ def _enhance_provenance_search(
             recorder.record_search_failure()
         notices.append("官方/一手资料补充检索失败，已使用主检索来源继续。")
 
+    if expected_official_domain and not _contains_domain(
+        supplemental_results,
+        expected_official_domain,
+    ):
+        notices.append(
+            f"补充检索未返回 {expected_official_domain} 官方来源，"
+            "已触发受限多引擎官方域名检索。"
+        )
+        if recorder:
+            recorder.record_search_attempt()
+        try:
+            fallback = _ddgs_auto_fallback(supplemental_query, max_results=5)
+            fallback_results = list(fallback.get("results") or [])
+            verified = [
+                item
+                for item in fallback_results
+                if _url_matches_domain(
+                    str(item.get("url") or ""), expected_official_domain
+                )
+            ]
+            if recorder:
+                if verified:
+                    recorder.record_search_success()
+                else:
+                    recorder.record_search_failure(empty_result=True)
+            if verified:
+                supplemental_results = verified
+            else:
+                notices.append("多引擎检索仍未返回经域名校验的官方来源。")
+        except Exception as exc:  # fail-open quality recovery
+            logger.warning("Verified official-source fallback failed: %s", exc)
+            if recorder:
+                recorder.record_search_failure()
+            notices.append("多引擎官方域名检索失败，已保留可用的原始来源。")
+
     merged = dict(payload)
     merged["results"] = list(payload.get("results") or []) + supplemental_results
     merged["notices"] = notices
@@ -229,11 +265,33 @@ def _enhance_provenance_search(
 
 def _build_authoritative_query(query: str) -> str:
     """Add a transparent official-site hint for known technical ecosystems."""
+    domain = _official_domain_for_query(query)
+    if domain:
+        return f"site:{domain} {query} official documentation"
+    return f"{query} 官方文档 official documentation primary source"
+
+
+def _official_domain_for_query(query: str) -> str | None:
     lowered = query.lower()
     for keywords, domain in _OFFICIAL_SITE_HINTS:
         if any(keyword in lowered for keyword in keywords):
-            return f"site:{domain} {query} official documentation"
-    return f"{query} 官方文档 official documentation primary source"
+            return domain
+    return None
+
+
+def _contains_domain(results: list[dict[str, Any]], expected_domain: str) -> bool:
+    return any(
+        _url_matches_domain(str(item.get("url") or ""), expected_domain)
+        for item in results
+    )
+
+
+def _url_matches_domain(url: str, expected_domain: str) -> bool:
+    from urllib.parse import urlsplit
+
+    hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    expected = expected_domain.lower().rstrip(".")
+    return hostname == expected or hostname.endswith(f".{expected}")
 
 
 def _run_recorded_fallback(

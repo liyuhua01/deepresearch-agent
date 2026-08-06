@@ -145,7 +145,7 @@ def test_provenance_search_adds_and_prioritizes_official_sources(monkeypatch) ->
     assert payload["results"][0]["url"] == (
         "https://docs.python.org/3/library/asyncio.html"
     )
-    assert len(payload["results"]) == 3
+    assert len(payload["results"]) == 2
     assert any("来源质量排序" in notice for notice in notices)
     metrics = recorder.snapshot()
     assert metrics["search_attempts"] == 2
@@ -174,6 +174,13 @@ def test_provenance_supplement_failure_keeps_primary_results(monkeypatch) -> Non
         }
 
     monkeypatch.setattr(search._GLOBAL_SEARCH_TOOL, "run", run_search)
+    monkeypatch.setattr(
+        search,
+        "_ddgs_auto_fallback",
+        lambda _query, max_results: (_ for _ in ()).throw(
+            RuntimeError("fallback unavailable")
+        ),
+    )
 
     payload, notices, _, _ = search.dispatch_search(
         "Python asyncio",
@@ -198,3 +205,51 @@ def test_authoritative_query_uses_known_official_technical_domain() -> None:
     )
 
     assert query.startswith("site:docs.python.org ")
+
+
+def test_provenance_retries_when_provider_ignores_official_domain(monkeypatch) -> None:
+    responses = iter(
+        [
+            {
+                "results": [{"title": "asyncio article", "url": "https://example.com/asyncio"}],
+                "backend": "duckduckgo",
+                "notices": [],
+            },
+            {
+                "results": [{"title": "Greek Peak", "url": "https://www.greekpeak.net/"}],
+                "backend": "duckduckgo",
+                "notices": [],
+            },
+        ]
+    )
+    monkeypatch.setattr(search._GLOBAL_SEARCH_TOOL, "run", lambda _params: next(responses))
+    monkeypatch.setattr(
+        search,
+        "_ddgs_auto_fallback",
+        lambda _query, max_results: {
+            "results": [
+                {
+                    "title": "asyncio — Asynchronous I/O",
+                    "url": "https://docs.python.org/3/library/asyncio.html",
+                    "content": "official evidence",
+                }
+            ]
+        },
+    )
+
+    payload, notices, _, _ = search.dispatch_search(
+        "Python asyncio concurrency",
+        Configuration(
+            search_api=SearchAPI.DUCKDUCKGO,
+            fetch_full_page=False,
+            enable_source_provenance=True,
+        ),
+        loop_count=0,
+    )
+
+    assert payload is not None
+    assert [item["url"] for item in payload["results"]] == [
+        "https://docs.python.org/3/library/asyncio.html",
+        "https://example.com/asyncio",
+    ]
+    assert any("受限多引擎" in notice for notice in notices)
