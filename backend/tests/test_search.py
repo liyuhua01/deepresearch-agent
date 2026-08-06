@@ -190,3 +190,11 @@ def test_provenance_supplement_failure_keeps_primary_results(monkeypatch) -> Non
         "https://example.com/asyncio"
     ]
     assert any("补充检索失败" in notice for notice in notices)
+
+
+def test_authoritative_query_uses_known_official_technical_domain() -> None:
+    query = search._build_authoritative_query(
+        "Python asyncio 与 ThreadPoolExecutor 错误处理"
+    )
+
+    assert query.startswith("site:docs.python.org ")

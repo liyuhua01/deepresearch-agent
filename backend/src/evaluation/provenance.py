@@ -19,6 +19,10 @@ from evaluation.domains import classify_domain
 _SOURCE_TOKEN = re.compile(r"\[(T\d+-S\d+)\](?!\()")
 _SOURCE_ID_ANYWHERE = re.compile(r"T\d+-S\d+")
 _SOURCE_LINK = re.compile(r"\[(T\d+-S\d+)\]\((https?://[^)\s]+)\)")
+_MARKDOWN_CITATION_LINK = re.compile(
+    r"\[[^\]]+\]\((https?://[^)\s]+)\)",
+    re.IGNORECASE,
+)
 _PROVENANCE_META = re.compile(
     r"来源覆盖说明|来源概览|本总结引用了|以下综合\s*T\d+-S\d+|"
     r"当前证据库|核心可用|辅助旁证|背景参考|已忽略",
@@ -227,6 +231,31 @@ def expand_source_tokens(markdown: str, sources: list[SourceRecord]) -> str:
         return f"[{_escape_markdown_label(source.title)}]({source.normalized_url})"
 
     return _SOURCE_TOKEN.sub(replace, markdown)
+
+
+def collapse_adjacent_duplicate_citations(markdown: str) -> str:
+    """Remove only adjacent Markdown links that normalize to the same URL."""
+    parts: list[str] = []
+    cursor = 0
+    previous_url: str | None = None
+    previous_end = 0
+    for match in _MARKDOWN_CITATION_LINK.finditer(markdown):
+        separator = markdown[previous_end : match.start()]
+        normalized = normalize_url(match.group(1))
+        if (
+            previous_url is not None
+            and normalized == previous_url
+            and not separator.strip()
+        ):
+            cursor = match.end()
+            previous_end = match.end()
+            continue
+        parts.append(markdown[cursor : match.end()])
+        cursor = match.end()
+        previous_url = normalized
+        previous_end = match.end()
+    parts.append(markdown[cursor:])
+    return "".join(parts)
 
 
 def audit_provenance(

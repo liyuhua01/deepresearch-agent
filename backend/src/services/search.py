@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 
 MAX_TOKENS_PER_SOURCE = 2000
 _GLOBAL_SEARCH_TOOL = SearchTool(backend="hybrid")
+_OFFICIAL_SITE_HINTS = (
+    ({"python", "asyncio", "threadpoolexecutor", "concurrent.futures"}, "docs.python.org"),
+    ({"kubernetes", "k8s"}, "kubernetes.io"),
+    ({"javascript", "typescript", "web api"}, "developer.mozilla.org"),
+    ({"openai", "chatgpt"}, "openai.com"),
+)
 
 
 def _ddgs_auto_fallback(query: str, *, max_results: int) -> dict[str, Any]:
@@ -174,7 +180,7 @@ def _enhance_provenance_search(
 ) -> dict[str, Any]:
     """Add one bounded authoritative-source search, then rank the merged pool."""
     search_api = get_config_value(config.search_api)
-    supplemental_query = f"{query} 官方文档 official documentation primary source"
+    supplemental_query = _build_authoritative_query(query)
     notices = list(payload.get("notices") or [])
     supplemental_results: list[dict[str, Any]] = []
     if recorder:
@@ -219,6 +225,15 @@ def _enhance_provenance_search(
         f"{len(ranked.get('results') or [])} 条。"
     )
     return ranked
+
+
+def _build_authoritative_query(query: str) -> str:
+    """Add a transparent official-site hint for known technical ecosystems."""
+    lowered = query.lower()
+    for keywords, domain in _OFFICIAL_SITE_HINTS:
+        if any(keyword in lowered for keyword in keywords):
+            return f"site:{domain} {query} official documentation"
+    return f"{query} 官方文档 official documentation primary source"
 
 
 def _run_recorded_fallback(

@@ -7,6 +7,7 @@ from evaluation.provenance import (
     SourceRecord,
     audit_provenance,
     build_source_records,
+    collapse_adjacent_duplicate_citations,
     expand_source_tokens,
     extract_claim_mappings,
     rank_search_results,
@@ -173,6 +174,22 @@ def test_bare_source_tokens_expand_to_clickable_links_without_touching_unknowns(
         in expanded
     )
     assert "[T2-S9]" in expanded
+
+
+def test_only_adjacent_same_url_citations_are_collapsed() -> None:
+    report = (
+        "来源："
+        "[编号](https://docs.python.org/3/library/asyncio.html) "
+        "[标题](https://docs.python.org/3/library/asyncio.html)。\n"
+        "另一结论仍可再次引用 "
+        "[标题](https://docs.python.org/3/library/asyncio.html)。"
+    )
+
+    collapsed = collapse_adjacent_duplicate_citations(report)
+
+    assert collapsed.count("https://docs.python.org/3/library/asyncio.html") == 2
+    assert "[编号]" in collapsed
+    assert "[标题]" in collapsed
 
 
 def test_final_audit_distinguishes_catalog_sources_and_uncatalogued_urls() -> None:

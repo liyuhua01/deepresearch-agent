@@ -10,6 +10,7 @@ from hello_agents import ToolAwareSimpleAgent
 from config import Configuration
 from evaluation.provenance import (
     audit_provenance,
+    collapse_adjacent_duplicate_citations,
     expand_source_tokens,
     format_source_catalog,
 )
@@ -104,7 +105,9 @@ class ReportingService:
             self._agent.clear_history()
             return report_text or "报告生成失败，请检查输入。"
 
-        report_text = expand_source_tokens(report_text, all_sources)
+        report_text = collapse_adjacent_duplicate_citations(
+            expand_source_tokens(report_text, all_sources)
+        )
         audit = audit_provenance(
             report_text,
             sources=all_sources,
@@ -117,7 +120,9 @@ class ReportingService:
                 revised = self._clean_report(
                     self._agent.run(self._build_quality_revision_prompt(audit))
                 )
-                revised = expand_source_tokens(revised, all_sources)
+                revised = collapse_adjacent_duplicate_citations(
+                    expand_source_tokens(revised, all_sources)
+                )
                 revised_audit = audit_provenance(
                     revised,
                     sources=all_sources,

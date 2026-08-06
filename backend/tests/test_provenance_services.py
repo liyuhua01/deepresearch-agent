@@ -169,8 +169,12 @@ def test_reporter_expands_tokens_and_records_final_provenance_audit() -> None:
 def test_reporter_applies_better_low_duplication_revision() -> None:
     repeated = (
         "## 核心洞见\n"
-        "- 事实一 [T1-S1] [T1-S1] [T1-S1]。\n"
-        "- 事实二 [T1-S1] [T1-S1] [T1-S1]。"
+        "- 事实一 [T1-S1]。\n"
+        "- 事实二 [T1-S1]。\n"
+        "- 事实三 [T1-S1]。\n"
+        "- 事实四 [T1-S1]。\n"
+        "- 事实五 [T1-S1]。\n"
+        "- 事实六 [T1-S1]。"
     )
     revised = (
         "## 核心洞见\n"
@@ -217,8 +221,12 @@ def test_reporter_rejects_revision_that_drops_source_diversity() -> None:
     )
     repeated = (
         "## 核心洞见\n"
-        "- 事实一 [T1-S1] [T1-S1] [T1-S1]。\n"
-        "- 事实二 [T1-S1] [T1-S1] [T1-S2]。"
+        "- 事实一 [T1-S1]。\n"
+        "- 事实二 [T1-S1]。\n"
+        "- 事实三 [T1-S1]。\n"
+        "- 事实四 [T1-S1]。\n"
+        "- 事实五 [T1-S1]。\n"
+        "- 事实六 [T1-S2]。"
     )
     lower_diversity = (
         "## 核心洞见\n"
