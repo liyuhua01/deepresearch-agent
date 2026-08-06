@@ -34,6 +34,8 @@ services:
         value: unavailable
       - key: LLM_STREAM_USAGE
         value: auto
+      - key: ENABLE_INLINE_CITATION_AUDIT
+        value: "false"
       - key: APP_ACCESS_PASSWORD
         sync: false
       - key: RATE_LIMIT_REQUESTS

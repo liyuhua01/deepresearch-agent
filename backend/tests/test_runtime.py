@@ -67,3 +67,13 @@ def test_run_telemetry_feature_flag_can_be_disabled(monkeypatch: pytest.MonkeyPa
     settings = RuntimeSettings.from_env()
 
     assert settings.enable_run_telemetry is False
+
+
+def test_inline_citation_audit_is_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ENABLE_INLINE_CITATION_AUDIT", raising=False)
+
+    settings = RuntimeSettings.from_env()
+
+    assert settings.enable_inline_citation_audit is False

@@ -19,6 +19,7 @@ dependencies = [
     "ddgs>=9.6.1",
     "loguru>=0.7.3",
     "huggingface-hub>=1.26.0",
+    "httpx>=0.28.0",
     "tiktoken>=0.12.0",
 ]
 
