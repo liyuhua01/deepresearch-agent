@@ -255,6 +255,7 @@ def _enhance_provenance_search(
         merged,
         relevance_text=query,
         max_results=8,
+        require_relevance=expected_official_domain is not None,
     )
     ranked.setdefault("notices", []).append(
         f"来源质量排序已从 {len(merged['results'])} 条候选中选择 "

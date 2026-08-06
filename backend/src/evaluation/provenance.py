@@ -356,6 +356,7 @@ def rank_search_results(
     *,
     relevance_text: str,
     max_results: int = 8,
+    require_relevance: bool = False,
 ) -> dict[str, Any]:
     """Rank, deduplicate and diversify search results without mutating input."""
     ranked: list[tuple[int, int, str, dict[str, Any]]] = []
@@ -380,7 +381,7 @@ def rank_search_results(
     # Once at least one lexically relevant candidate exists, unrelated search
     # noise is evidence we should exclude rather than merely rank lower.
     relevant_ranked = [entry for entry in ranked if entry[0] >= 5]
-    if relevant_ranked:
+    if relevant_ranked or require_relevance:
         ranked = relevant_ranked
     selected: list[dict[str, Any]] = []
     domain_counts: dict[str, int] = {}

@@ -184,6 +184,23 @@ def test_search_ranking_drops_irrelevant_noise_when_relevant_results_exist() -> 
     ]
 
 
+def test_search_ranking_can_reject_an_entire_off_topic_pool() -> None:
+    ranked = rank_search_results(
+        {
+            "results": [
+                {
+                    "title": "Greek Peak lift tickets",
+                    "url": "https://www.greekpeak.net/lift-tickets/",
+                }
+            ]
+        },
+        relevance_text="Python asyncio network concurrency",
+        require_relevance=True,
+    )
+
+    assert ranked["results"] == []
+
+
 def test_bare_source_tokens_expand_to_clickable_links_without_touching_unknowns() -> (
     None
 ):
