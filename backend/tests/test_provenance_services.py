@@ -86,6 +86,55 @@ def test_summarizer_retries_when_first_turn_contains_only_dsml_tool_call() -> No
     assert "禁止再次调用任何工具" in agent.prompts[1]
 
 
+def test_summarizer_discards_partial_tool_payload_before_summary_heading() -> None:
+    response = (
+        '我先同步笔记。\n, "content": "内部笔记"}]\n\n'
+        "## 任务总结\n"
+        "- asyncio 适合高并发网络等待，事件循环可避免为每个连接创建线程 "
+        "[T1-S1](https://docs.python.org/3/library/asyncio.html)。"
+    )
+    agent = SequencedAgent([response])
+    service = SummarizationService(
+        lambda: agent,
+        Configuration(enable_notes=False, enable_source_provenance=True),
+    )
+    task = TodoItem(id=1, title="并发", intent="比较", query="asyncio")
+    task.source_records = [_source()]
+
+    summary = service.summarize_task(
+        SummaryState(research_topic="并发"), task, "证据"
+    )
+
+    assert summary.startswith("## 任务总结")
+    assert '"content"' not in summary
+    assert len(agent.prompts) == 1
+
+
+def test_summarizer_retries_for_nonempty_tool_payload_without_summary_heading() -> (
+    None
+):
+    payload = '我先同步笔记。\n, "content": "只有内部笔记"}]'
+    recovered = (
+        "## 任务总结\n"
+        "- asyncio 适合高并发网络等待，事件循环可避免为每个连接创建线程 "
+        "[T1-S1](https://docs.python.org/3/library/asyncio.html)。"
+    )
+    agent = SequencedAgent([payload, recovered])
+    service = SummarizationService(
+        lambda: agent,
+        Configuration(enable_notes=False, enable_source_provenance=True),
+    )
+    task = TodoItem(id=1, title="并发", intent="比较", query="asyncio")
+    task.source_records = [_source()]
+
+    summary = service.summarize_task(
+        SummaryState(research_topic="并发"), task, "证据"
+    )
+
+    assert summary == recovered
+    assert len(agent.prompts) == 2
+
+
 def test_reporter_expands_tokens_and_records_final_provenance_audit() -> None:
     fake_agent = FakeAgent("asyncio 适合网络等待 [T1-S1]。")
     service = ReportingService(

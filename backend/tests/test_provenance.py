@@ -83,6 +83,22 @@ def test_claim_mappings_keep_known_and_unknown_ids_separate() -> None:
     assert claims[4].source_ids == ()
 
 
+def test_source_coverage_prose_is_not_counted_as_an_evidence_claim() -> None:
+    summary = (
+        "## 任务总结\n\n"
+        "> 以下综合 T2-S1～T2-S2 两份来源的证据。\n\n"
+        "- asyncio 使用事件循环处理网络等待，适合高并发 I/O "
+        "[T2-S1](https://docs.python.org/3/library/asyncio.html)。\n\n"
+        "*来源覆盖说明：本总结引用了 T2-S1、T2-S2。*"
+    )
+
+    claims = extract_claim_mappings(summary, task_id=2, sources=_sources())
+
+    assert len(claims) == 1
+    assert claims[0].source_ids == ("T2-S1",)
+    assert claims[0].unlinked_source_ids == ()
+
+
 def test_source_relevance_is_flagged_without_dropping_results() -> None:
     records = build_source_records(
         {

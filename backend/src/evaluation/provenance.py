@@ -18,6 +18,10 @@ from evaluation.citations import (
 _SOURCE_TOKEN = re.compile(r"\[(T\d+-S\d+)\](?!\()")
 _SOURCE_ID_ANYWHERE = re.compile(r"T\d+-S\d+")
 _SOURCE_LINK = re.compile(r"\[(T\d+-S\d+)\]\((https?://[^)\s]+)\)")
+_PROVENANCE_META = re.compile(
+    r"来源覆盖说明|来源概览|本总结引用了|以下综合\s*T\d+-S\d+",
+    re.IGNORECASE,
+)
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])")
 _TERM = re.compile(r"[A-Za-z][A-Za-z0-9]{2,}|[\u3400-\u9fff]{2,}")
 _GENERIC_TERMS = {
@@ -151,7 +155,7 @@ def extract_claim_mappings(
     by_id = {source.source_id: source for source in sources}
     mappings: list[ClaimMapping] = []
     for unit in split_claim_units(summary_markdown):
-        if not is_evidence_claim(unit):
+        if _PROVENANCE_META.search(unit) or not is_evidence_claim(unit):
             continue
         mentioned = list(dict.fromkeys(_SOURCE_ID_ANYWHERE.findall(unit)))
         linked_urls: dict[str, list[str]] = {}

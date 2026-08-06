@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterator
 from typing import Tuple
 
@@ -34,10 +35,15 @@ class SummarizationService:
         try:
             response = agent.run(prompt)
             summary_text = self._clean_summary(response)
-            if self._config.enable_source_provenance and not summary_text:
-                summary_text = self._clean_summary(
+            if (
+                self._config.enable_source_provenance
+                and not self._is_substantive_summary(summary_text)
+            ):
+                recovered = self._clean_summary(
                     agent.run(self._build_summary_only_prompt(task))
                 )
+                if recovered:
+                    summary_text = recovered
         finally:
             agent.clear_history()
 
@@ -85,10 +91,12 @@ class SummarizationService:
                     for chunk in agent.stream_run(prompt):
                         raw_buffer += chunk
                     visible_output = self._clean_summary(raw_buffer)
-                    if not visible_output:
-                        visible_output = self._clean_summary(
+                    if not self._is_substantive_summary(visible_output):
+                        recovered = self._clean_summary(
                             agent.run(self._build_summary_only_prompt(task))
                         )
+                        if recovered:
+                            visible_output = recovered
                     if visible_output:
                         yield visible_output
                     return
@@ -129,10 +137,20 @@ class SummarizationService:
         cleaned = text.strip()
         if self._config.strip_thinking_tokens:
             cleaned = strip_thinking_tokens(cleaned)
-        return strip_tool_calls(
+        cleaned = strip_tool_calls(
             cleaned,
             include_dsml=self._config.enable_source_provenance,
         ).strip()
+        if self._config.enable_source_provenance:
+            heading = re.search(r"(?m)^#{1,6}\s*任务总结\s*$", cleaned)
+            if heading:
+                cleaned = cleaned[heading.start() :].strip()
+        return cleaned
+
+    @staticmethod
+    def _is_substantive_summary(text: str) -> bool:
+        """Require the explicit user-summary contract, not tool payload prose."""
+        return bool(re.search(r"(?m)^#{1,6}\s*任务总结\s*$", text))
 
     @staticmethod
     def _build_summary_only_prompt(task: TodoItem) -> str:
