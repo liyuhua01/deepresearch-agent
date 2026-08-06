@@ -61,15 +61,50 @@ def test_claim_mappings_keep_known_and_unknown_ids_separate() -> None:
         "- asyncio 使用事件循环处理大量网络等待任务，适合高并发 I/O "
         "[T2-S1](https://docs.python.org/3/library/asyncio.html)。\n"
         "- 这个判断引用了不存在的来源编号，需要被检测出来 [T2-S9]。\n"
+        "- 这个来源编号配上了错误 URL，需要作为不匹配处理 "
+        "[T2-S2](https://example.com/wrong)。\n"
+        "- 这个来源编号没有附带 URL，需要作为未链接处理 [T2-S2]。\n"
         "- 这个足够长的事实性判断没有引用，也必须作为未映射结论保留下来。"
     )
 
     claims = extract_claim_mappings(summary, task_id=2, sources=_sources())
 
-    assert [claim.claim_id for claim in claims] == ["T2-C1", "T2-C2", "T2-C3"]
+    assert [claim.claim_id for claim in claims] == [
+        "T2-C1",
+        "T2-C2",
+        "T2-C3",
+        "T2-C4",
+        "T2-C5",
+    ]
     assert claims[0].source_ids == ("T2-S1",)
     assert claims[1].unknown_source_ids == ("T2-S9",)
-    assert claims[2].source_ids == ()
+    assert claims[2].mismatched_source_ids == ("T2-S2",)
+    assert claims[3].unlinked_source_ids == ("T2-S2",)
+    assert claims[4].source_ids == ()
+
+
+def test_source_relevance_is_flagged_without_dropping_results() -> None:
+    records = build_source_records(
+        {
+            "results": [
+                {
+                    "title": "asyncio event loop documentation",
+                    "url": "https://docs.python.org/3/library/asyncio.html",
+                },
+                {
+                    "title": "uv package manager quickstart",
+                    "url": "https://example.com/uv",
+                },
+            ]
+        },
+        task_id=1,
+        relevance_text="asyncio and ThreadPoolExecutor for network I/O",
+    )
+
+    assert len(records) == 2
+    assert records[0].relevance_status == "likely_relevant"
+    assert "asyncio" in records[0].relevance_terms
+    assert records[1].relevance_status == "needs_review"
 
 
 def test_bare_source_tokens_expand_to_clickable_links_without_touching_unknowns() -> (
@@ -104,3 +139,20 @@ def test_final_audit_distinguishes_catalog_sources_and_uncatalogued_urls() -> No
     assert audit.uncatalogued_url_count == 1
     assert audit.mapped_claim_count == 1
     assert audit.unmapped_claim_count == 1
+    assert audit.report_duplicate_citation_count == 0
+    assert audit.report_duplicate_citation_rate == 0.0
+
+
+def test_final_audit_reports_duplicate_and_concentrated_citations() -> None:
+    report = (
+        "事实一 [文档](https://docs.python.org/3/library/asyncio.html)。\n"
+        "事实二 [文档](https://docs.python.org/3/library/asyncio.html)。\n"
+        "事实三 [线程](https://docs.python.org/3/library/threading.html)。"
+    )
+
+    audit = audit_provenance(report, sources=_sources(), claims=[])
+
+    assert audit.report_citation_count_raw == 3
+    assert audit.report_duplicate_citation_count == 1
+    assert audit.report_duplicate_citation_rate == 1 / 3
+    assert audit.report_max_source_citation_share == 2 / 3

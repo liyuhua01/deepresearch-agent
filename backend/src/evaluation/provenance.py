@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from evaluation.citations import (
     audit_report,
+    citation_occurrence_counts,
     is_evidence_claim,
     normalize_url,
     split_claim_units,
@@ -16,6 +17,20 @@ from evaluation.citations import (
 
 _SOURCE_TOKEN = re.compile(r"\[(T\d+-S\d+)\](?!\()")
 _SOURCE_ID_ANYWHERE = re.compile(r"T\d+-S\d+")
+_SOURCE_LINK = re.compile(r"\[(T\d+-S\d+)\]\((https?://[^)\s]+)\)")
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])")
+_TERM = re.compile(r"[A-Za-z][A-Za-z0-9]{2,}|[\u3400-\u9fff]{2,}")
+_GENERIC_TERMS = {
+    "python",
+    "using",
+    "guide",
+    "tutorial",
+    "documentation",
+    "docs",
+    "比较",
+    "建议",
+    "场景",
+}
 
 
 @dataclass(frozen=True)
@@ -28,6 +43,8 @@ class SourceRecord:
     url: str
     normalized_url: str
     domain: str
+    relevance_status: str = "unassessed"
+    relevance_terms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,6 +56,8 @@ class ClaimMapping:
     text: str
     source_ids: tuple[str, ...]
     unknown_source_ids: tuple[str, ...]
+    mismatched_source_ids: tuple[str, ...] = ()
+    unlinked_source_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -46,6 +65,7 @@ class ProvenanceAudit:
     """Cross-check final-report links against process-time source records."""
 
     catalog_source_count: int
+    catalog_sources_needing_relevance_review: int
     cited_catalog_source_count: int
     cited_catalog_source_rate: float | None
     report_unique_url_count: int
@@ -55,6 +75,12 @@ class ProvenanceAudit:
     mapped_claim_count: int
     unmapped_claim_count: int
     unknown_source_id_count: int
+    mismatched_source_id_count: int
+    unlinked_source_id_count: int
+    report_unknown_source_id_count: int
+    report_duplicate_citation_count: int
+    report_duplicate_citation_rate: float | None
+    report_max_source_citation_share: float | None
     final_claim_units: int
     final_claim_units_with_citations: int
     final_claim_citation_coverage: float | None
@@ -64,6 +90,7 @@ def build_source_records(
     search_result: dict[str, Any] | None,
     *,
     task_id: int,
+    relevance_text: str = "",
 ) -> list[SourceRecord]:
     """Assign deterministic IDs to unique valid URLs in search-result order."""
     results = (search_result or {}).get("results") or []
@@ -76,6 +103,10 @@ def build_source_records(
             continue
         seen.add(normalized)
         title = str(item.get("title") or raw_url).strip() or raw_url
+        relevance_status, relevance_terms = _assess_source_relevance(
+            relevance_text,
+            f"{title} {normalized}",
+        )
         records.append(
             SourceRecord(
                 source_id=f"T{task_id}-S{len(records) + 1}",
@@ -84,6 +115,8 @@ def build_source_records(
                 url=raw_url,
                 normalized_url=normalized,
                 domain=urlsplit(normalized).hostname or "",
+                relevance_status=relevance_status,
+                relevance_terms=relevance_terms,
             )
         )
     return records
@@ -94,6 +127,7 @@ def format_source_catalog(records: list[SourceRecord]) -> str:
     return "\n".join(
         f"- [{record.source_id}] [{_escape_markdown_label(record.title)}]"
         f"({record.normalized_url})"
+        f"{' [相关性待复核]' if record.relevance_status == 'needs_review' else ''}"
         for record in records
     )
 
@@ -114,23 +148,42 @@ def extract_claim_mappings(
     sources: list[SourceRecord],
 ) -> list[ClaimMapping]:
     """Extract evidence claims and validate every referenced source ID."""
-    allowed = {source.source_id for source in sources}
+    by_id = {source.source_id: source for source in sources}
     mappings: list[ClaimMapping] = []
     for unit in split_claim_units(summary_markdown):
         if not is_evidence_claim(unit):
             continue
         mentioned = list(dict.fromkeys(_SOURCE_ID_ANYWHERE.findall(unit)))
-        known = tuple(source_id for source_id in mentioned if source_id in allowed)
+        linked_urls: dict[str, list[str]] = {}
+        for source_id, raw_url in _SOURCE_LINK.findall(unit):
+            linked_urls.setdefault(source_id, []).append(raw_url)
+
+        known: list[str] = []
+        mismatched: list[str] = []
+        unlinked: list[str] = []
+        for source_id in mentioned:
+            source = by_id.get(source_id)
+            if source is None:
+                continue
+            urls = linked_urls.get(source_id, [])
+            if not urls:
+                unlinked.append(source_id)
+            elif any(normalize_url(url) == source.normalized_url for url in urls):
+                known.append(source_id)
+            else:
+                mismatched.append(source_id)
         unknown = tuple(
-            source_id for source_id in mentioned if source_id not in allowed
+            source_id for source_id in mentioned if source_id not in by_id
         )
         mappings.append(
             ClaimMapping(
                 claim_id=f"T{task_id}-C{len(mappings) + 1}",
                 task_id=task_id,
                 text=unit,
-                source_ids=known,
+                source_ids=tuple(known),
                 unknown_source_ids=unknown,
+                mismatched_source_ids=tuple(mismatched),
+                unlinked_source_ids=tuple(unlinked),
             )
         )
     return mappings
@@ -157,12 +210,22 @@ def audit_provenance(
 ) -> ProvenanceAudit:
     """Compare final URLs with the source catalog and process-time claim mappings."""
     citation_audit = audit_report(report_markdown)
+    occurrence_counts = citation_occurrence_counts(report_markdown)
     report_urls = {citation.normalized_url for citation in citation_audit.citations}
     catalog_urls = {source.normalized_url for source in sources}
     cited_catalog = report_urls & catalog_urls
     mapped_claims = sum(bool(claim.source_ids) for claim in claims)
+    duplicate_count = max(
+        0,
+        citation_audit.citation_count_raw - citation_audit.citation_count_unique,
+    )
+    report_source_ids = set(_SOURCE_ID_ANYWHERE.findall(report_markdown))
+    catalog_source_ids = {source.source_id for source in sources}
     return ProvenanceAudit(
         catalog_source_count=len(catalog_urls),
+        catalog_sources_needing_relevance_review=sum(
+            source.relevance_status == "needs_review" for source in sources
+        ),
         cited_catalog_source_count=len(cited_catalog),
         cited_catalog_source_rate=(
             len(cited_catalog) / len(catalog_urls) if catalog_urls else None
@@ -174,6 +237,24 @@ def audit_provenance(
         mapped_claim_count=mapped_claims,
         unmapped_claim_count=len(claims) - mapped_claims,
         unknown_source_id_count=sum(len(claim.unknown_source_ids) for claim in claims),
+        mismatched_source_id_count=sum(
+            len(claim.mismatched_source_ids) for claim in claims
+        ),
+        unlinked_source_id_count=sum(
+            len(claim.unlinked_source_ids) for claim in claims
+        ),
+        report_unknown_source_id_count=len(report_source_ids - catalog_source_ids),
+        report_duplicate_citation_count=duplicate_count,
+        report_duplicate_citation_rate=(
+            duplicate_count / citation_audit.citation_count_raw
+            if citation_audit.citation_count_raw
+            else None
+        ),
+        report_max_source_citation_share=(
+            max(occurrence_counts.values()) / citation_audit.citation_count_raw
+            if citation_audit.citation_count_raw and occurrence_counts
+            else None
+        ),
         final_claim_units=citation_audit.claim_units,
         final_claim_units_with_citations=citation_audit.claim_units_with_citations,
         final_claim_citation_coverage=citation_audit.claim_citation_coverage,
@@ -194,3 +275,31 @@ def _escape_markdown_label(value: str) -> str:
         .replace("]", "\\]")
         .replace("\n", " ")
     )
+
+
+def _assess_source_relevance(
+    relevance_text: str,
+    source_text: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Flag weak lexical matches for review without deleting search evidence."""
+    if not relevance_text.strip():
+        return "unassessed", ()
+    query_terms = _relevance_terms(relevance_text)
+    source_terms = _relevance_terms(source_text)
+    overlap = tuple(sorted(query_terms & source_terms))
+    return ("likely_relevant" if overlap else "needs_review", overlap)
+
+
+def _relevance_terms(text: str) -> set[str]:
+    expanded = _CAMEL_BOUNDARY.sub(" ", text)
+    expanded = re.sub(r"[._+/-]+", " ", expanded)
+    lowered = expanded.lower()
+    terms = {
+        match.group(0).lower()
+        for match in _TERM.finditer(lowered)
+    }
+    if "threadpoolexecutor" in text.lower():
+        terms.update({"thread", "pool", "executor", "concurrent", "futures"})
+    if "asyncio" in terms:
+        terms.update({"async", "event", "loop", "coroutine"})
+    return {term for term in terms if term and term not in _GENERIC_TERMS}

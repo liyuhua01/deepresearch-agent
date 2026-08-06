@@ -39,6 +39,8 @@
 
 预发布 A/B 可以在单次 `/research` 或 `/research/stream` 请求中传入 `enable_source_provenance: true|false`。该字段只覆盖当前运行；省略时继续使用部署环境的 `ENABLE_SOURCE_PROVENANCE`，因此旧前端和既有 API 调用保持原行为。
 
+来源追踪 schema `1.3` 还会记录编号—URL 错配、裸编号、重复引用率、最大单一来源占比和需要相关性复核的来源数。相关性规则只添加风险标记，不直接删除搜索结果；总结器和报告器不得让被标记来源单独支撑核心结论。
+
 ## 上线验收
 
 - 访问 `/healthz` 返回 `{"status":"ok"}`。

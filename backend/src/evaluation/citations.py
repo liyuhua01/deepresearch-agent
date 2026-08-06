@@ -137,6 +137,16 @@ def audit_report(markdown: str) -> CitationAudit:
     )
 
 
+def citation_occurrence_counts(markdown: str) -> dict[str, int]:
+    """Count every valid citation occurrence by normalized URL."""
+    counts: Counter[str] = Counter()
+    for _, raw_url in _extract_candidates(markdown):
+        normalized = normalize_url(raw_url)
+        if normalized is not None:
+            counts[normalized] += 1
+    return dict(counts)
+
+
 def _extract_candidates(markdown: str) -> list[tuple[int, str]]:
     searchable = _mask_code_fences(markdown)
     candidates: list[tuple[int, str]] = []

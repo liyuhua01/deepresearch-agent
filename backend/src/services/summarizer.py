@@ -33,14 +33,13 @@ class SummarizationService:
         agent = self._agent_factory()
         try:
             response = agent.run(prompt)
+            summary_text = self._clean_summary(response)
+            if self._config.enable_source_provenance and not summary_text:
+                summary_text = self._clean_summary(
+                    agent.run(self._build_summary_only_prompt(task))
+                )
         finally:
             agent.clear_history()
-
-        summary_text = response.strip()
-        if self._config.strip_thinking_tokens:
-            summary_text = strip_thinking_tokens(summary_text)
-
-        summary_text = strip_tool_calls(summary_text).strip()
 
         return summary_text or "暂无可用信息"
 
@@ -82,6 +81,18 @@ class SummarizationService:
         def generator() -> Iterator[str]:
             nonlocal raw_buffer, visible_output, emit_index
             try:
+                if self._config.enable_source_provenance:
+                    for chunk in agent.stream_run(prompt):
+                        raw_buffer += chunk
+                    visible_output = self._clean_summary(raw_buffer)
+                    if not visible_output:
+                        visible_output = self._clean_summary(
+                            agent.run(self._build_summary_only_prompt(task))
+                        )
+                    if visible_output:
+                        yield visible_output
+                    return
+
                 for chunk in agent.stream_run(prompt):
                     raw_buffer += chunk
                     if remove_thinking:
@@ -102,6 +113,8 @@ class SummarizationService:
                 agent.clear_history()
 
         def get_summary() -> str:
+            if self._config.enable_source_provenance:
+                return visible_output.strip()
             if remove_thinking:
                 cleaned = strip_thinking_tokens(visible_output)
             else:
@@ -110,6 +123,31 @@ class SummarizationService:
             return strip_tool_calls(cleaned).strip()
 
         return generator(), get_summary
+
+    def _clean_summary(self, text: str) -> str:
+        """Remove reasoning and tool envelopes from user-visible summary text."""
+        cleaned = text.strip()
+        if self._config.strip_thinking_tokens:
+            cleaned = strip_thinking_tokens(cleaned)
+        return strip_tool_calls(
+            cleaned,
+            include_dsml=self._config.enable_source_provenance,
+        ).strip()
+
+    @staticmethod
+    def _build_summary_only_prompt(task: TodoItem) -> str:
+        """Request the missing user-facing answer after a tool-only model turn."""
+        source_lines = "\n".join(
+            f"- [{source.source_id}]({source.normalized_url}) {source.title}"
+            for source in task.source_records
+        )
+        return (
+            "笔记工具调用已经完成。现在禁止再次调用任何工具，也不要输出 JSON、"
+            "DSML 或工具调用包装。请只输出面向用户的 Markdown 任务总结，包含 3-5 条"
+            "有实质内容的关键发现。每条外部事实必须紧邻一个目录中的完整引用链接，"
+            "且来源编号与 URL 必须严格配对；证据不足时标注‘待验证’。\n"
+            f"来源目录：\n{source_lines}"
+        )
 
     def _build_prompt(self, state: SummaryState, task: TodoItem, context: str) -> str:
         """Construct the summarization prompt shared by both modes."""
@@ -123,6 +161,8 @@ class SummarizationService:
                 "- 每条包含外部事实、数字或比较判断的关键发现，末尾必须紧邻至少一个来源；"
                 "格式必须为 `[来源编号](对应URL)`。\n"
                 "- 不得编造来源编号或 URL；没有证据的判断必须明确标注‘待验证’。\n"
+                "- 标有‘相关性待复核’的来源不得单独支撑核心结论；只有证据正文"
+                "明确支持当前任务时才能引用，否则忽略。\n"
                 "</来源溯源要求>\n"
             )
 

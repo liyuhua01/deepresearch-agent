@@ -22,6 +22,17 @@ class FakeAgent:
         return None
 
 
+class SequencedAgent(FakeAgent):
+    def __init__(self, responses: list[str]) -> None:
+        super().__init__("")
+        self.responses = iter(responses)
+        self.prompts: list[str] = []
+
+    def run(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return next(self.responses)
+
+
 def _source() -> SourceRecord:
     return SourceRecord(
         source_id="T1-S1",
@@ -46,6 +57,33 @@ def test_summarizer_prompt_requires_only_catalogued_source_ids() -> None:
     assert "本任务只允许使用这些来源编号：T1-S1" in prompt
     assert "[来源编号](对应URL)" in prompt
     assert "不得编造来源编号或 URL" in prompt
+
+
+def test_summarizer_retries_when_first_turn_contains_only_dsml_tool_call() -> None:
+    tool_only = (
+        "<｜｜DSML｜｜TOOL_CALL_OVERALL>"
+        '[{"name":"note","arguments":{"content":"internal"}}]'
+        "</｜｜DSML｜｜TOOL_CALL_OVERALL>"
+    )
+    final_summary = (
+        "## 任务总结\n- asyncio 适合高并发网络等待 "
+        "[T1-S1](https://docs.python.org/3/library/asyncio.html)。"
+    )
+    agent = SequencedAgent([tool_only, final_summary])
+    service = SummarizationService(
+        lambda: agent,
+        Configuration(enable_notes=False, enable_source_provenance=True),
+    )
+    task = TodoItem(id=1, title="并发", intent="比较", query="asyncio")
+    task.source_records = [_source()]
+
+    summary = service.summarize_task(
+        SummaryState(research_topic="并发"), task, "证据"
+    )
+
+    assert summary == final_summary
+    assert len(agent.prompts) == 2
+    assert "禁止再次调用任何工具" in agent.prompts[1]
 
 
 def test_reporter_expands_tokens_and_records_final_provenance_audit() -> None:

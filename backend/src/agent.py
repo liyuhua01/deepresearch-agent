@@ -436,8 +436,20 @@ class DeepResearchAgent:
         )
 
         if self.config.enable_source_provenance:
-            task.source_records = build_source_records(search_result, task_id=task.id)
-            self.recorder.record_source_catalog(len(task.source_records))
+            task.source_records = build_source_records(
+                search_result,
+                task_id=task.id,
+                relevance_text=(
+                    f"{state.research_topic} {task.title} {task.intent} {task.query}"
+                ),
+            )
+            self.recorder.record_source_catalog(
+                len(task.source_records),
+                needing_relevance_review=sum(
+                    source.relevance_status == "needs_review"
+                    for source in task.source_records
+                ),
+            )
             if task.source_records:
                 sources_summary = format_source_catalog(task.source_records)
                 context = add_catalog_to_context(context, task.source_records)
@@ -510,6 +522,12 @@ class DeepResearchAgent:
                 unmapped=sum(not claim.source_ids for claim in task.claim_mappings),
                 unknown_source_ids=sum(
                     len(claim.unknown_source_ids) for claim in task.claim_mappings
+                ),
+                mismatched_source_ids=sum(
+                    len(claim.mismatched_source_ids) for claim in task.claim_mappings
+                ),
+                unlinked_source_ids=sum(
+                    len(claim.unlinked_source_ids) for claim in task.claim_mappings
                 ),
             )
         task.status = "completed"
