@@ -37,6 +37,8 @@
 
 `ENABLE_SOURCE_PROVENANCE=false` 是来源溯源模块的初始安全开关。开启后会为每个任务的搜索结果分配 `T1-S1` 形式的稳定编号，在任务完成事件中增加结论—来源映射，并在最终报告事件中增加溯源复核摘要；不会增加或删除 SSE 事件类型。首次开启必须先在预发布环境做同题 A/B 对照，确认报告完整性和耗时没有明显回归，再考虑用于公开演示。
 
+预发布 A/B 可以在单次 `/research` 或 `/research/stream` 请求中传入 `enable_source_provenance: true|false`。该字段只覆盖当前运行；省略时继续使用部署环境的 `ENABLE_SOURCE_PROVENANCE`，因此旧前端和既有 API 调用保持原行为。
+
 ## 上线验收
 
 - 访问 `/healthz` 返回 `{"status":"ok"}`。

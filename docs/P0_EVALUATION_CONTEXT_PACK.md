@@ -208,6 +208,7 @@ final_report -> metrics -> done
 - 原有 `sources`、`task_status`、`final_report` 事件类型保持不变，只在开关启用时增加可选字段。
 - 过程指标写入同一个终态 JSON，包括来源目录数、映射/未映射结论数、未知编号、报告来源复用率和目录外 URL 数。
 - `ENABLE_SOURCE_PROVENANCE=false` 是初始安全默认值；完成预发布对照验收后再开启。
+- A/B 验收可通过请求字段 `enable_source_provenance` 对单次运行显式覆盖；字段省略时仍严格遵循部署默认值，避免为了两组实验反复修改 Render 环境并重启服务。
 
 ## 4. 自动引用检查设计
 

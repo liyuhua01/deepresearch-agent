@@ -62,6 +62,13 @@ class ResearchRequest(BaseModel):
 
     topic: str = Field(..., min_length=2, max_length=2000)
     search_api: SearchAPI | None = None
+    enable_source_provenance: bool | None = Field(
+        default=None,
+        description=(
+            "Optional per-run provenance override for controlled evaluation; "
+            "when omitted, use the deployment default"
+        ),
+    )
     job_id: str = Field(
         default_factory=lambda: uuid4().hex,
         min_length=8,
@@ -91,6 +98,8 @@ def _build_config(payload: ResearchRequest) -> Configuration:
     overrides: Dict[str, Any] = {}
     if payload.search_api is not None:
         overrides["search_api"] = payload.search_api
+    if payload.enable_source_provenance is not None:
+        overrides["enable_source_provenance"] = payload.enable_source_provenance
     return Configuration.from_env(overrides=overrides)
 
 

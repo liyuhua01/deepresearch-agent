@@ -6,7 +6,14 @@ from fastapi.testclient import TestClient
 
 import main as main_module
 from config import Configuration
-from main import ResearchResponse, _register_job, _remove_job, app
+from main import (
+    ResearchRequest,
+    ResearchResponse,
+    _build_config,
+    _register_job,
+    _remove_job,
+    app,
+)
 
 
 def test_health_endpoint_is_publicly_available() -> None:
@@ -25,6 +32,24 @@ def test_disabled_optional_provenance_does_not_change_response_shape() -> None:
         "report_markdown": "# report",
         "todo_items": [],
     }
+
+
+def test_request_can_override_provenance_for_controlled_ab_run(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_SOURCE_PROVENANCE", "false")
+
+    enabled = _build_config(
+        ResearchRequest(
+            topic="测试研究主题",
+            job_id="provenance_ab_on",
+            enable_source_provenance=True,
+        )
+    )
+    defaulted = _build_config(
+        ResearchRequest(topic="测试研究主题", job_id="provenance_ab_default")
+    )
+
+    assert enabled.enable_source_provenance is True
+    assert defaulted.enable_source_provenance is False
 
 
 def test_missing_model_configuration_returns_actionable_error(
