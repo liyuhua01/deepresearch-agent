@@ -166,6 +166,89 @@ def test_reporter_expands_tokens_and_records_final_provenance_audit() -> None:
     assert state.provenance_audit["cited_catalog_source_rate"] == 1.0
 
 
+def test_reporter_applies_better_low_duplication_revision() -> None:
+    repeated = (
+        "## 核心洞见\n"
+        "- 事实一 [T1-S1] [T1-S1] [T1-S1]。\n"
+        "- 事实二 [T1-S1] [T1-S1] [T1-S1]。"
+    )
+    revised = (
+        "## 核心洞见\n"
+        "- 事实一由官方文档支持 [T1-S1]。\n"
+        "- 事实二仍由同一官方文档支持 [T1-S1]。"
+    )
+    agent = SequencedAgent([repeated, revised])
+    service = ReportingService(
+        agent,
+        Configuration(enable_notes=False, enable_source_provenance=True),
+    )
+    task = TodoItem(
+        id=1,
+        title="并发",
+        intent="比较",
+        query="asyncio",
+        status="completed",
+        summary="任务总结",
+    )
+    task.source_records = [_source()]
+    task.claim_mappings = [
+        ClaimMapping("T1-C1", 1, "事实一由官方文档支持", ("T1-S1",), ())
+    ]
+    state = SummaryState(research_topic="并发", todo_items=[task])
+
+    report = service.generate_report(state)
+
+    assert report.count("https://docs.python.org/3/library/asyncio.html") == 2
+    assert len(agent.prompts) == 2
+    assert "每个 URL 在全文最多出现 3 次" in agent.prompts[1]
+    assert state.provenance_audit["report_quality_retry_attempted"] is True
+    assert state.provenance_audit["report_quality_retry_applied"] is True
+    assert state.provenance_audit["report_duplicate_citation_rate"] == 0.5
+
+
+def test_reporter_rejects_revision_that_drops_source_diversity() -> None:
+    second_source = SourceRecord(
+        source_id="T1-S2",
+        task_id=1,
+        title="线程官方文档",
+        url="https://docs.python.org/3/library/threading.html",
+        normalized_url="https://docs.python.org/3/library/threading.html",
+        domain="docs.python.org",
+    )
+    repeated = (
+        "## 核心洞见\n"
+        "- 事实一 [T1-S1] [T1-S1] [T1-S1]。\n"
+        "- 事实二 [T1-S1] [T1-S1] [T1-S2]。"
+    )
+    lower_diversity = (
+        "## 核心洞见\n"
+        "- 事实一由单一文档支持 [T1-S1]。\n"
+        "- 事实二仍由单一文档支持 [T1-S1]。"
+    )
+    agent = SequencedAgent([repeated, lower_diversity])
+    service = ReportingService(
+        agent,
+        Configuration(enable_notes=False, enable_source_provenance=True),
+    )
+    task = TodoItem(
+        id=1,
+        title="并发",
+        intent="比较",
+        query="asyncio",
+        status="completed",
+        summary="任务总结",
+    )
+    task.source_records = [_source(), second_source]
+    state = SummaryState(research_topic="并发", todo_items=[task])
+
+    report = service.generate_report(state)
+
+    assert "线程官方文档" in report
+    assert state.provenance_audit["report_quality_retry_attempted"] is True
+    assert state.provenance_audit["report_quality_retry_applied"] is False
+    assert state.provenance_audit["report_unique_url_count"] == 2
+
+
 def test_disabled_provenance_preserves_report_text_and_prompt() -> None:
     fake_agent = FakeAgent("保留原始编号 [T1-S1]。")
     service = ReportingService(

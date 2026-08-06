@@ -14,6 +14,7 @@ from evaluation.citations import (
     normalize_url,
     split_claim_units,
 )
+from evaluation.domains import classify_domain
 
 _SOURCE_TOKEN = re.compile(r"\[(T\d+-S\d+)\](?!\()")
 _SOURCE_ID_ANYWHERE = re.compile(r"T\d+-S\d+")
@@ -36,6 +37,15 @@ _GENERIC_TERMS = {
     "建议",
     "场景",
 }
+_SOURCE_TYPE_WEIGHTS = {
+    "government": 6,
+    "official_documentation": 6,
+    "academic": 5,
+    "company_official": 3,
+    "news_media": 2,
+    "community": 1,
+    "unknown": 0,
+}
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,8 @@ class SourceRecord:
     domain: str
     relevance_status: str = "unassessed"
     relevance_terms: tuple[str, ...] = ()
+    source_type: str = "unknown"
+    quality_score: int = 0
 
 
 @dataclass(frozen=True)
@@ -71,6 +83,7 @@ class ProvenanceAudit:
 
     catalog_source_count: int
     catalog_sources_needing_relevance_review: int
+    catalog_authoritative_source_count: int
     cited_catalog_source_count: int
     cited_catalog_source_rate: float | None
     report_unique_url_count: int
@@ -112,6 +125,8 @@ def build_source_records(
             relevance_text,
             f"{title} {normalized}",
         )
+        domain = urlsplit(normalized).hostname or ""
+        source_type = classify_domain(domain, normalized)
         records.append(
             SourceRecord(
                 source_id=f"T{task_id}-S{len(records) + 1}",
@@ -119,9 +134,15 @@ def build_source_records(
                 title=title,
                 url=raw_url,
                 normalized_url=normalized,
-                domain=urlsplit(normalized).hostname or "",
+                domain=domain,
                 relevance_status=relevance_status,
                 relevance_terms=relevance_terms,
+                source_type=source_type,
+                quality_score=_source_quality_score(
+                    source_type,
+                    relevance_status,
+                    bool(str(item.get("content") or item.get("raw_content") or "")),
+                ),
             )
         )
     return records
@@ -132,6 +153,7 @@ def format_source_catalog(records: list[SourceRecord]) -> str:
     return "\n".join(
         f"- [{record.source_id}] [{_escape_markdown_label(record.title)}]"
         f"({record.normalized_url})"
+        f" [{_source_type_label(record.source_type)}]"
         f"{' [相关性待复核]' if record.relevance_status == 'needs_review' else ''}"
         for record in records
     )
@@ -231,6 +253,11 @@ def audit_provenance(
         catalog_sources_needing_relevance_review=sum(
             source.relevance_status == "needs_review" for source in sources
         ),
+        catalog_authoritative_source_count=sum(
+            source.source_type
+            in {"government", "official_documentation", "academic"}
+            for source in sources
+        ),
         cited_catalog_source_count=len(cited_catalog),
         cited_catalog_source_rate=(
             len(cited_catalog) / len(catalog_urls) if catalog_urls else None
@@ -293,6 +320,77 @@ def _assess_source_relevance(
     source_terms = _relevance_terms(source_text)
     overlap = tuple(sorted(query_terms & source_terms))
     return ("likely_relevant" if overlap else "needs_review", overlap)
+
+
+def rank_search_results(
+    search_result: dict[str, Any],
+    *,
+    relevance_text: str,
+    max_results: int = 8,
+) -> dict[str, Any]:
+    """Rank, deduplicate and diversify search results without mutating input."""
+    ranked: list[tuple[int, int, str, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(search_result.get("results") or []):
+        normalized = normalize_url(str(item.get("url") or ""))
+        if normalized is None or normalized in seen:
+            continue
+        seen.add(normalized)
+        title = str(item.get("title") or normalized)
+        relevance_status, _ = _assess_source_relevance(
+            relevance_text,
+            f"{title} {normalized}",
+        )
+        domain = urlsplit(normalized).hostname or ""
+        source_type = classify_domain(domain, normalized)
+        has_content = bool(str(item.get("content") or item.get("raw_content") or ""))
+        score = _source_quality_score(source_type, relevance_status, has_content)
+        ranked.append((score, index, domain, dict(item)))
+
+    ranked.sort(key=lambda entry: (-entry[0], entry[1]))
+    selected: list[dict[str, Any]] = []
+    domain_counts: dict[str, int] = {}
+    for _, _, domain, item in ranked:
+        source_type = classify_domain(domain, str(item.get("url") or ""))
+        domain_limit = 3 if source_type in {
+            "government",
+            "official_documentation",
+            "academic",
+        } else 2
+        if domain_counts.get(domain, 0) >= domain_limit:
+            continue
+        selected.append(item)
+        domain_counts[domain] = domain_counts.get(domain, 0) + 1
+        if len(selected) >= max(1, max_results):
+            break
+
+    payload = dict(search_result)
+    payload["results"] = selected
+    return payload
+
+
+def _source_quality_score(
+    source_type: str,
+    relevance_status: str,
+    has_content: bool,
+) -> int:
+    return (
+        _SOURCE_TYPE_WEIGHTS.get(source_type, 0)
+        + (5 if relevance_status == "likely_relevant" else -4)
+        + (1 if has_content else 0)
+    )
+
+
+def _source_type_label(source_type: str) -> str:
+    return {
+        "government": "政府/公共机构",
+        "official_documentation": "官方文档",
+        "academic": "学术来源",
+        "company_official": "企业官方",
+        "news_media": "新闻媒体",
+        "community": "社区来源",
+        "unknown": "一般网页",
+    }.get(source_type, "一般网页")
 
 
 def _relevance_terms(text: str) -> set[str]:

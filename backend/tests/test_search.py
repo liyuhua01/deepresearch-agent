@@ -91,3 +91,102 @@ def test_empty_duckduckgo_payload_uses_multi_engine_fallback(monkeypatch) -> Non
     assert metrics["search_empty_results"] == 1
     assert metrics["fallback_triggers"] == 1
     assert metrics["fallback_successes"] == 1
+
+
+def test_provenance_search_adds_and_prioritizes_official_sources(monkeypatch) -> None:
+    recorder = RunRecorder(run_id="quality_search", topic="asyncio")
+    responses = iter(
+        [
+            {
+                "results": [
+                    {
+                        "title": "Asyncio community comparison",
+                        "url": "https://example.com/asyncio-comparison",
+                        "content": "community evidence",
+                    },
+                    {
+                        "title": "Unrelated package manager",
+                        "url": "https://example.org/uv-guide",
+                        "content": "unrelated",
+                    },
+                ],
+                "backend": "duckduckgo",
+                "answer": None,
+                "notices": [],
+            },
+            {
+                "results": [
+                    {
+                        "title": "asyncio — Asynchronous I/O",
+                        "url": "https://docs.python.org/3/library/asyncio.html",
+                        "content": "official evidence",
+                    }
+                ],
+                "backend": "duckduckgo",
+                "answer": None,
+                "notices": [],
+            },
+        ]
+    )
+    monkeypatch.setattr(search._GLOBAL_SEARCH_TOOL, "run", lambda _params: next(responses))
+
+    payload, notices, _, _ = search.dispatch_search(
+        "Python asyncio high concurrency",
+        Configuration(
+            search_api=SearchAPI.DUCKDUCKGO,
+            fetch_full_page=False,
+            enable_source_provenance=True,
+        ),
+        loop_count=0,
+        recorder=recorder,
+    )
+
+    assert payload is not None
+    assert payload["results"][0]["url"] == (
+        "https://docs.python.org/3/library/asyncio.html"
+    )
+    assert len(payload["results"]) == 3
+    assert any("来源质量排序" in notice for notice in notices)
+    metrics = recorder.snapshot()
+    assert metrics["search_attempts"] == 2
+    assert metrics["search_successes"] == 2
+
+
+def test_provenance_supplement_failure_keeps_primary_results(monkeypatch) -> None:
+    calls = 0
+
+    def run_search(_params):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("supplement unavailable")
+        return {
+            "results": [
+                {
+                    "title": "Primary asyncio result",
+                    "url": "https://example.com/asyncio",
+                    "content": "evidence",
+                }
+            ],
+            "backend": "duckduckgo",
+            "answer": None,
+            "notices": [],
+        }
+
+    monkeypatch.setattr(search._GLOBAL_SEARCH_TOOL, "run", run_search)
+
+    payload, notices, _, _ = search.dispatch_search(
+        "Python asyncio",
+        Configuration(
+            search_api=SearchAPI.DUCKDUCKGO,
+            fetch_full_page=False,
+            enable_source_provenance=True,
+        ),
+        loop_count=0,
+    )
+
+    assert payload is not None
+    assert [item["url"] for item in payload["results"]] == [
+        "https://example.com/asyncio"
+    ]
+    assert any("补充检索失败" in notice for notice in notices)

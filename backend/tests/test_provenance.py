@@ -9,6 +9,7 @@ from evaluation.provenance import (
     build_source_records,
     expand_source_tokens,
     extract_claim_mappings,
+    rank_search_results,
 )
 
 
@@ -122,6 +123,42 @@ def test_source_relevance_is_flagged_without_dropping_results() -> None:
     assert records[0].relevance_status == "likely_relevant"
     assert "asyncio" in records[0].relevance_terms
     assert records[1].relevance_status == "needs_review"
+
+
+def test_search_ranking_prefers_authoritative_relevant_and_diverse_sources() -> None:
+    ranked = rank_search_results(
+        {
+            "results": [
+                {
+                    "title": "asyncio community post",
+                    "url": "https://example.com/one",
+                    "content": "evidence",
+                },
+                {
+                    "title": "asyncio duplicate domain",
+                    "url": "https://example.com/two",
+                    "content": "evidence",
+                },
+                {
+                    "title": "asyncio third same domain",
+                    "url": "https://example.com/three",
+                    "content": "evidence",
+                },
+                {
+                    "title": "asyncio — official documentation",
+                    "url": "https://docs.python.org/3/library/asyncio.html",
+                    "content": "official evidence",
+                },
+            ]
+        },
+        relevance_text="Python asyncio concurrency",
+        max_results=8,
+    )
+
+    assert ranked["results"][0]["url"] == (
+        "https://docs.python.org/3/library/asyncio.html"
+    )
+    assert len(ranked["results"]) == 3
 
 
 def test_bare_source_tokens_expand_to_clickable_links_without_touching_unknowns() -> (

@@ -152,7 +152,11 @@ def test_llm_usage_aggregation_is_thread_safe() -> None:
 
 def test_source_provenance_metrics_join_the_terminal_snapshot() -> None:
     recorder = _recorder()
-    recorder.record_source_catalog(5, needing_relevance_review=2)
+    recorder.record_source_catalog(
+        5,
+        needing_relevance_review=2,
+        authoritative_sources=2,
+    )
     recorder.record_claim_provenance(
         mapped=3,
         unmapped=2,
@@ -169,6 +173,8 @@ def test_source_provenance_metrics_join_the_terminal_snapshot() -> None:
             "report_duplicate_citation_count": 4,
             "report_duplicate_citation_rate": 0.4,
             "report_max_source_citation_share": 0.5,
+            "report_quality_retry_attempted": True,
+            "report_quality_retry_applied": True,
             "final_claim_units": 10,
             "final_claim_units_with_citations": 8,
             "final_claim_citation_coverage": 0.8,
@@ -179,6 +185,7 @@ def test_source_provenance_metrics_join_the_terminal_snapshot() -> None:
     metrics = recorder.snapshot()
     assert metrics["catalog_sources"] == 5
     assert metrics["catalog_sources_needing_relevance_review"] == 2
+    assert metrics["catalog_authoritative_sources"] == 2
     assert metrics["mapped_claims"] == 3
     assert metrics["unmapped_claims"] == 2
     assert metrics["unknown_source_ids"] == 1
@@ -191,6 +198,8 @@ def test_source_provenance_metrics_join_the_terminal_snapshot() -> None:
     assert metrics["report_duplicate_citations"] == 4
     assert metrics["report_duplicate_citation_rate"] == 0.4
     assert metrics["report_max_source_citation_share"] == 0.5
+    assert metrics["report_quality_retry_attempted"] is True
+    assert metrics["report_quality_retry_applied"] is True
     assert metrics["final_claim_units"] == 10
     assert metrics["final_claim_units_with_citations"] == 8
     assert metrics["final_claim_citation_coverage"] == 0.8

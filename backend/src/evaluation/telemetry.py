@@ -21,7 +21,7 @@ def _utc_now() -> datetime:
 class RunRecorder:
     """Collect metrics without becoming a dependency of the research result."""
 
-    schema_version = "1.3"
+    schema_version = "1.4"
 
     def __init__(
         self,
@@ -81,6 +81,7 @@ class RunRecorder:
         self._total_tokens = 0
         self._catalog_sources = 0
         self._catalog_sources_needing_relevance_review = 0
+        self._catalog_authoritative_sources = 0
         self._mapped_claims = 0
         self._unmapped_claims = 0
         self._unknown_source_ids = 0
@@ -93,6 +94,8 @@ class RunRecorder:
         self._report_duplicate_citations: int | None = None
         self._report_duplicate_citation_rate: float | None = None
         self._report_max_source_citation_share: float | None = None
+        self._report_quality_retry_attempted: bool | None = None
+        self._report_quality_retry_applied: bool | None = None
         self._final_claim_units: int | None = None
         self._final_claim_units_with_citations: int | None = None
         self._final_claim_citation_coverage: float | None = None
@@ -227,6 +230,7 @@ class RunRecorder:
         count: int,
         *,
         needing_relevance_review: int = 0,
+        authoritative_sources: int = 0,
     ) -> None:
         """Accumulate unique source records created for one task."""
         if not self.enabled:
@@ -236,6 +240,9 @@ class RunRecorder:
                 self._catalog_sources += max(0, int(count))
                 self._catalog_sources_needing_relevance_review += max(
                     0, int(needing_relevance_review)
+                )
+                self._catalog_authoritative_sources += max(
+                    0, int(authoritative_sources)
                 )
         except Exception as exc:
             self.add_warning(f"source_catalog_metric_failed:{type(exc).__name__}")
@@ -297,6 +304,12 @@ class RunRecorder:
                     min(1.0, max(0.0, float(max_share)))
                     if max_share is not None
                     else None
+                )
+                self._report_quality_retry_attempted = bool(
+                    audit.get("report_quality_retry_attempted", False)
+                )
+                self._report_quality_retry_applied = bool(
+                    audit.get("report_quality_retry_applied", False)
                 )
                 self._final_claim_units = max(
                     0, int(audit.get("final_claim_units", 0))
@@ -415,6 +428,9 @@ class RunRecorder:
                 "catalog_sources_needing_relevance_review": (
                     self._catalog_sources_needing_relevance_review
                 ),
+                "catalog_authoritative_sources": (
+                    self._catalog_authoritative_sources
+                ),
                 "mapped_claims": self._mapped_claims,
                 "unmapped_claims": self._unmapped_claims,
                 "unknown_source_ids": self._unknown_source_ids,
@@ -432,6 +448,12 @@ class RunRecorder:
                 ),
                 "report_max_source_citation_share": (
                     self._report_max_source_citation_share
+                ),
+                "report_quality_retry_attempted": (
+                    self._report_quality_retry_attempted
+                ),
+                "report_quality_retry_applied": (
+                    self._report_quality_retry_applied
                 ),
                 "final_claim_units": self._final_claim_units,
                 "final_claim_units_with_citations": (

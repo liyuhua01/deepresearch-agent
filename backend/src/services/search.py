@@ -7,6 +7,7 @@ from typing import Any, Optional, Tuple
 
 from hello_agents.tools import SearchTool
 
+from evaluation.provenance import rank_search_results
 from evaluation.telemetry import RunRecorder
 
 try:
@@ -126,7 +127,17 @@ def dispatch_search(
         }
     else:
         payload = raw_response
-        notices = list(payload.get("notices") or [])
+
+    if config.enable_source_provenance and payload.get("results"):
+        payload = _enhance_provenance_search(
+            query,
+            payload,
+            config=config,
+            loop_count=loop_count,
+            recorder=recorder,
+        )
+
+    notices = list(payload.get("notices") or [])
 
     backend_label = str(payload.get("backend") or search_api)
     answer_text = payload.get("answer")
@@ -151,6 +162,63 @@ def dispatch_search(
     )
 
     return payload, notices, answer_text, backend_label
+
+
+def _enhance_provenance_search(
+    query: str,
+    payload: dict[str, Any],
+    *,
+    config: Configuration,
+    loop_count: int,
+    recorder: RunRecorder | None,
+) -> dict[str, Any]:
+    """Add one bounded authoritative-source search, then rank the merged pool."""
+    search_api = get_config_value(config.search_api)
+    supplemental_query = f"{query} 官方文档 official documentation primary source"
+    notices = list(payload.get("notices") or [])
+    supplemental_results: list[dict[str, Any]] = []
+    if recorder:
+        recorder.record_search_attempt()
+    try:
+        supplemental = _GLOBAL_SEARCH_TOOL.run(
+            {
+                "input": supplemental_query,
+                "backend": search_api,
+                "mode": "structured",
+                "fetch_full_page": config.fetch_full_page,
+                "max_results": 5,
+                "max_tokens_per_source": MAX_TOKENS_PER_SOURCE,
+                "loop_count": loop_count,
+            }
+        )
+        if isinstance(supplemental, dict):
+            supplemental_results = list(supplemental.get("results") or [])
+        if recorder:
+            if supplemental_results:
+                recorder.record_search_success()
+            else:
+                recorder.record_search_failure(empty_result=True)
+        if not supplemental_results:
+            notices.append("官方/一手资料补充检索未返回结果，已保留主检索来源。")
+    except Exception as exc:  # quality enhancement must remain fail-open
+        logger.warning("Authoritative source supplement failed: %s", exc)
+        if recorder:
+            recorder.record_search_failure()
+        notices.append("官方/一手资料补充检索失败，已使用主检索来源继续。")
+
+    merged = dict(payload)
+    merged["results"] = list(payload.get("results") or []) + supplemental_results
+    merged["notices"] = notices
+    ranked = rank_search_results(
+        merged,
+        relevance_text=query,
+        max_results=8,
+    )
+    ranked.setdefault("notices", []).append(
+        f"来源质量排序已从 {len(merged['results'])} 条候选中选择 "
+        f"{len(ranked.get('results') or [])} 条。"
+    )
+    return ranked
 
 
 def _run_recorded_fallback(

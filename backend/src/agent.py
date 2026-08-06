@@ -449,6 +449,11 @@ class DeepResearchAgent:
                     source.relevance_status == "needs_review"
                     for source in task.source_records
                 ),
+                authoritative_sources=sum(
+                    source.source_type
+                    in {"government", "official_documentation", "academic"}
+                    for source in task.source_records
+                ),
             )
             if task.source_records:
                 sources_summary = format_source_catalog(task.source_records)
