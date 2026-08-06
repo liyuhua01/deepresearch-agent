@@ -19,7 +19,8 @@ _SOURCE_TOKEN = re.compile(r"\[(T\d+-S\d+)\](?!\()")
 _SOURCE_ID_ANYWHERE = re.compile(r"T\d+-S\d+")
 _SOURCE_LINK = re.compile(r"\[(T\d+-S\d+)\]\((https?://[^)\s]+)\)")
 _PROVENANCE_META = re.compile(
-    r"来源覆盖说明|来源概览|本总结引用了|以下综合\s*T\d+-S\d+",
+    r"来源覆盖说明|来源概览|本总结引用了|以下综合\s*T\d+-S\d+|"
+    r"当前证据库|核心可用|辅助旁证|背景参考|已忽略",
     re.IGNORECASE,
 )
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])")

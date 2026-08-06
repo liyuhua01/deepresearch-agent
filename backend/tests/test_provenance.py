@@ -90,6 +90,7 @@ def test_source_coverage_prose_is_not_counted_as_an_evidence_claim() -> None:
         "- asyncio 使用事件循环处理网络等待，适合高并发 I/O "
         "[T2-S1](https://docs.python.org/3/library/asyncio.html)。\n\n"
         "*来源覆盖说明：本总结引用了 T2-S1、T2-S2。*"
+        "\n\n- **已忽略**：T2-S2（与主题无关）。"
     )
 
     claims = extract_claim_mappings(summary, task_id=2, sources=_sources())
