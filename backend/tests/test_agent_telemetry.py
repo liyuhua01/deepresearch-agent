@@ -132,3 +132,37 @@ def test_streaming_agent_keeps_existing_event_contract(monkeypatch) -> None:
     assert event_types[-1] == "done"
     assert "metrics" not in event_types
     assert recorder.snapshot()["completed_subtasks"] == 1
+
+
+def test_streaming_provenance_adds_fields_without_new_event_types(monkeypatch) -> None:
+    class ProvenanceSummarizer(FakeSummarizer):
+        def stream_task_summary(self, _state, _task, _context):
+            summary = (
+                "这是一条足够长的事实性研究结论，并且直接关联检索来源 "
+                "[T1-S1](https://example.com/source)。"
+            )
+            return iter([summary]), lambda: summary
+
+    recorder = RunRecorder(run_id="agent_provenance", topic="测试主题")
+    instance = _agent(recorder)
+    instance.config.enable_source_provenance = True
+    instance.summarizer = ProvenanceSummarizer()
+    monkeypatch.setattr(agent_module, "dispatch_search", _fake_search)
+    monkeypatch.setattr(
+        agent_module,
+        "prepare_research_context",
+        lambda *_args: ("- [Source](https://example.com/source)", "Evidence"),
+    )
+
+    events = list(instance.run_stream("测试主题"))
+    sources_event = next(event for event in events if event["type"] == "sources")
+    completed_event = next(
+        event
+        for event in events
+        if event["type"] == "task_status" and event["status"] == "completed"
+    )
+
+    assert sources_event["source_records"][0]["source_id"] == "T1-S1"
+    assert completed_event["claim_mappings"][0]["source_ids"] == ("T1-S1",)
+    assert [event["type"] for event in events][-1] == "done"
+    assert not any(event["type"] == "metrics" for event in events)

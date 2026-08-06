@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 
 from hello_agents import ToolAwareSimpleAgent
 
-from models import SummaryState
 from config import Configuration
-from utils import strip_thinking_tokens
+from evaluation.provenance import (
+    audit_provenance,
+    expand_source_tokens,
+    format_source_catalog,
+)
+from models import SummaryState
 from services.text_processing import strip_tool_calls
+from utils import strip_thinking_tokens
 
 
 class ReportingService:
@@ -44,6 +50,30 @@ class ReportingService:
 
         notes_section = "\n".join(note_references) if note_references else "- 暂无可用任务笔记"
 
+        all_sources = [source for task in state.todo_items for source in task.source_records]
+        all_claims = [claim for task in state.todo_items for claim in task.claim_mappings]
+        provenance_section = ""
+        if self._config.enable_source_provenance and all_sources:
+            claim_lines = []
+            for claim in all_claims:
+                source_ids = ", ".join(claim.source_ids) or "无已验证来源"
+                claim_lines.append(
+                    f"- {claim.claim_id}: {claim.text}\n  来源ID: {source_ids}"
+                )
+            provenance_section = (
+                "\n来源编号目录：\n"
+                f"{format_source_catalog(all_sources)}\n"
+                "\n已提取的结论—来源映射：\n"
+                f"{chr(10).join(claim_lines) or '- 暂无映射'}\n"
+                "\n<最终报告引用要求>\n"
+                "- 每条事实性结论后紧邻一个或多个来源编号。\n"
+                "- 可输出 `[T1-S1]`，系统会展开为来源标题和真实链接；"
+                "也可直接输出 `[来源标题](URL)`。\n"
+                "- 只能使用目录中存在的编号和 URL，不得把引用集中到文末代替内联引用。\n"
+                "- 参考来源章节仍需保留，并按任务汇总。\n"
+                "</最终报告引用要求>\n"
+            )
+
         read_template = json.dumps({"action": "read", "note_id": "<note_id>"}, ensure_ascii=False)
         create_conclusion_template = json.dumps(
             {
@@ -60,6 +90,7 @@ class ReportingService:
             f"研究主题：{state.research_topic}\n"
             f"任务概览：\n{''.join(tasks_block)}\n"
             f"可用任务笔记：\n{notes_section}\n"
+            f"{provenance_section}"
             f"请针对每条任务笔记使用格式：[TOOL_CALL:note:{read_template}] 读取内容，整合所有信息后撰写报告。\n"
             f"如需输出汇总结论，可追加调用：[TOOL_CALL:note:{create_conclusion_template}] 保存报告要点。"
         )
@@ -73,5 +104,14 @@ class ReportingService:
 
         report_text = strip_tool_calls(report_text).strip()
 
-        return report_text or "报告生成失败，请检查输入。"
+        if self._config.enable_source_provenance:
+            report_text = expand_source_tokens(report_text, all_sources)
+            state.provenance_audit = asdict(
+                audit_provenance(
+                    report_text,
+                    sources=all_sources,
+                    claims=all_claims,
+                )
+            )
 
+        return report_text or "报告生成失败，请检查输入。"

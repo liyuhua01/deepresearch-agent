@@ -148,3 +148,32 @@ def test_llm_usage_aggregation_is_thread_safe() -> None:
     assert metrics["completion_tokens"] == 500
     assert metrics["total_tokens"] == 1500
     assert metrics["usage_source"] == "provider"
+
+
+def test_source_provenance_metrics_join_the_terminal_snapshot() -> None:
+    recorder = _recorder()
+    recorder.record_source_catalog(5)
+    recorder.record_claim_provenance(mapped=3, unmapped=2, unknown_source_ids=1)
+    recorder.record_provenance_audit(
+        {
+            "cited_catalog_source_count": 4,
+            "cited_catalog_source_rate": 0.8,
+            "uncatalogued_url_count": 1,
+            "final_claim_units": 10,
+            "final_claim_units_with_citations": 8,
+            "final_claim_citation_coverage": 0.8,
+        }
+    )
+    recorder.mark_completed()
+
+    metrics = recorder.snapshot()
+    assert metrics["catalog_sources"] == 5
+    assert metrics["mapped_claims"] == 3
+    assert metrics["unmapped_claims"] == 2
+    assert metrics["unknown_source_ids"] == 1
+    assert metrics["report_cited_catalog_sources"] == 4
+    assert metrics["report_cited_catalog_source_rate"] == 0.8
+    assert metrics["report_uncatalogued_urls"] == 1
+    assert metrics["final_claim_units"] == 10
+    assert metrics["final_claim_units_with_citations"] == 8
+    assert metrics["final_claim_citation_coverage"] == 0.8

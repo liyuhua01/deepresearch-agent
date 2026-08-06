@@ -21,7 +21,7 @@ def _utc_now() -> datetime:
 class RunRecorder:
     """Collect metrics without becoming a dependency of the research result."""
 
-    schema_version = "1.1"
+    schema_version = "1.2"
 
     def __init__(
         self,
@@ -79,6 +79,16 @@ class RunRecorder:
         self._prompt_tokens = 0
         self._completion_tokens = 0
         self._total_tokens = 0
+        self._catalog_sources = 0
+        self._mapped_claims = 0
+        self._unmapped_claims = 0
+        self._unknown_source_ids = 0
+        self._report_cited_catalog_sources: int | None = None
+        self._report_cited_catalog_source_rate: float | None = None
+        self._report_uncatalogued_urls: int | None = None
+        self._final_claim_units: int | None = None
+        self._final_claim_units_with_citations: int | None = None
+        self._final_claim_citation_coverage: float | None = None
         self._warnings: list[str] = list(dict.fromkeys(initial_warnings))
 
     @contextmanager
@@ -205,6 +215,65 @@ class RunRecorder:
         except Exception as exc:
             self.add_warning(f"llm_usage_metric_failed:{type(exc).__name__}")
 
+    def record_source_catalog(self, count: int) -> None:
+        """Accumulate unique source records created for one task."""
+        if not self.enabled:
+            return
+        try:
+            with self._lock:
+                self._catalog_sources += max(0, int(count))
+        except Exception as exc:
+            self.add_warning(f"source_catalog_metric_failed:{type(exc).__name__}")
+
+    def record_claim_provenance(
+        self,
+        *,
+        mapped: int,
+        unmapped: int,
+        unknown_source_ids: int,
+    ) -> None:
+        """Accumulate process-time claim-to-source mapping outcomes."""
+        if not self.enabled:
+            return
+        try:
+            with self._lock:
+                self._mapped_claims += max(0, int(mapped))
+                self._unmapped_claims += max(0, int(unmapped))
+                self._unknown_source_ids += max(0, int(unknown_source_ids))
+        except Exception as exc:
+            self.add_warning(f"claim_provenance_metric_failed:{type(exc).__name__}")
+
+    def record_provenance_audit(self, audit: dict[str, Any]) -> None:
+        """Store final-report catalog reuse metrics without retaining report text."""
+        if not self.enabled or not audit:
+            return
+        try:
+            with self._lock:
+                self._report_cited_catalog_sources = max(
+                    0, int(audit.get("cited_catalog_source_count", 0))
+                )
+                rate = audit.get("cited_catalog_source_rate")
+                self._report_cited_catalog_source_rate = (
+                    min(1.0, max(0.0, float(rate))) if rate is not None else None
+                )
+                self._report_uncatalogued_urls = max(
+                    0, int(audit.get("uncatalogued_url_count", 0))
+                )
+                self._final_claim_units = max(
+                    0, int(audit.get("final_claim_units", 0))
+                )
+                self._final_claim_units_with_citations = max(
+                    0, int(audit.get("final_claim_units_with_citations", 0))
+                )
+                coverage = audit.get("final_claim_citation_coverage")
+                self._final_claim_citation_coverage = (
+                    min(1.0, max(0.0, float(coverage)))
+                    if coverage is not None
+                    else None
+                )
+        except Exception as exc:
+            self.add_warning(f"provenance_audit_metric_failed:{type(exc).__name__}")
+
     def mark_completed(self) -> None:
         """Finalize the run as completed."""
 
@@ -303,6 +372,22 @@ class RunRecorder:
                 "usage_source": self._usage_source(),
                 "estimated_cost": estimated_cost,
                 "cost_currency": cost_currency,
+                "catalog_sources": self._catalog_sources,
+                "mapped_claims": self._mapped_claims,
+                "unmapped_claims": self._unmapped_claims,
+                "unknown_source_ids": self._unknown_source_ids,
+                "report_cited_catalog_sources": self._report_cited_catalog_sources,
+                "report_cited_catalog_source_rate": (
+                    self._report_cited_catalog_source_rate
+                ),
+                "report_uncatalogued_urls": self._report_uncatalogued_urls,
+                "final_claim_units": self._final_claim_units,
+                "final_claim_units_with_citations": (
+                    self._final_claim_units_with_citations
+                ),
+                "final_claim_citation_coverage": (
+                    self._final_claim_citation_coverage
+                ),
                 "metrics_complete": not self._warnings,
                 "warnings": list(self._warnings),
             }

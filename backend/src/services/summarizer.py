@@ -7,11 +7,11 @@ from typing import Tuple
 
 from hello_agents import ToolAwareSimpleAgent
 
-from models import SummaryState, TodoItem
 from config import Configuration
-from utils import strip_thinking_tokens
+from models import SummaryState, TodoItem
 from services.notes import build_note_guidance
 from services.text_processing import strip_tool_calls
+from utils import strip_thinking_tokens
 
 
 class SummarizationService:
@@ -114,12 +114,25 @@ class SummarizationService:
     def _build_prompt(self, state: SummaryState, task: TodoItem, context: str) -> str:
         """Construct the summarization prompt shared by both modes."""
 
+        provenance_guidance = ""
+        if self._config.enable_source_provenance and task.source_records:
+            allowed_ids = ", ".join(source.source_id for source in task.source_records)
+            provenance_guidance = (
+                "\n<来源溯源要求>\n"
+                f"- 本任务只允许使用这些来源编号：{allowed_ids}。\n"
+                "- 每条包含外部事实、数字或比较判断的关键发现，末尾必须紧邻至少一个来源；"
+                "格式必须为 `[来源编号](对应URL)`。\n"
+                "- 不得编造来源编号或 URL；没有证据的判断必须明确标注‘待验证’。\n"
+                "</来源溯源要求>\n"
+            )
+
         return (
             f"任务主题：{state.research_topic}\n"
             f"任务名称：{task.title}\n"
             f"任务目标：{task.intent}\n"
             f"检索查询：{task.query}\n"
             f"任务上下文：\n{context}\n"
+            f"{provenance_guidance}"
             f"{build_note_guidance(task)}\n"
             "请按照以上协作要求先同步笔记，然后返回一份面向用户的 Markdown 总结（仍遵循任务总结模板）。"
         )

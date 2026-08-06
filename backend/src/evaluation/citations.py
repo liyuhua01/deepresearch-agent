@@ -205,7 +205,7 @@ def split_claim_units(markdown: str) -> list[str]:
 def claim_citation_coverage(markdown: str) -> ClaimCoverage:
     """Calculate nearby-citation coverage without claiming semantic support."""
     evidence_units = [
-        unit for unit in split_claim_units(markdown) if _requires_evidence(unit)
+        unit for unit in split_claim_units(markdown) if is_evidence_claim(unit)
     ]
     cited = sum(bool(_INLINE_CITATION.search(unit)) for unit in evidence_units)
     total = len(evidence_units)
@@ -216,7 +216,8 @@ def claim_citation_coverage(markdown: str) -> ClaimCoverage:
     )
 
 
-def _requires_evidence(unit: str) -> bool:
+def is_evidence_claim(unit: str) -> bool:
+    """Return whether a unit is substantial enough to require external evidence."""
     without_links = _INLINE_CITATION.sub("", unit)
     plain = _MARKDOWN_DECORATION.sub("", without_links).strip(" -:：")
     if not plain or _STRUCTURAL_ONLY.fullmatch(plain):

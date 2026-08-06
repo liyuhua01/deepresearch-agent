@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 import main as main_module
 from config import Configuration
-from main import _register_job, _remove_job, app
+from main import ResearchResponse, _register_job, _remove_job, app
 
 
 def test_health_endpoint_is_publicly_available() -> None:
@@ -15,6 +15,16 @@ def test_health_endpoint_is_publicly_available() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_disabled_optional_provenance_does_not_change_response_shape() -> None:
+    response = ResearchResponse(job_id="job_123456", report_markdown="# report")
+
+    assert response.model_dump(exclude_none=True) == {
+        "job_id": "job_123456",
+        "report_markdown": "# report",
+        "todo_items": [],
+    }
 
 
 def test_missing_model_configuration_returns_actionable_error(

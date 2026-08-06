@@ -7,7 +7,12 @@ from dataclasses import replace
 import pytest
 
 from config import Configuration, SearchAPI
-from runtime import ResearchGate, ResearchLimitExceeded, RuntimeSettings, research_configuration_errors
+from runtime import (
+    ResearchGate,
+    ResearchLimitExceeded,
+    RuntimeSettings,
+    research_configuration_errors,
+)
 
 
 def _settings(**overrides: object) -> RuntimeSettings:
@@ -77,3 +82,13 @@ def test_inline_citation_audit_is_disabled_by_default(
     settings = RuntimeSettings.from_env()
 
     assert settings.enable_inline_citation_audit is False
+
+
+def test_source_provenance_is_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ENABLE_SOURCE_PROVENANCE", raising=False)
+
+    config = Configuration.from_env()
+
+    assert config.enable_source_provenance is False

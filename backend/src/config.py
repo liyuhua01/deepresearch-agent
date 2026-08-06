@@ -94,6 +94,10 @@ class Configuration(BaseModel):
         default="auto",
         description="Whether to request usage metadata in streaming responses",
     )
+    enable_source_provenance: bool = Field(
+        default=False,
+        description="Track stable source IDs and claim-to-source mappings",
+    )
 
     @classmethod
     def from_env(cls, overrides: Optional[dict[str, Any]] = None) -> "Configuration":
@@ -125,6 +129,7 @@ class Configuration(BaseModel):
             "notes_workspace": os.getenv("NOTES_WORKSPACE"),
             "token_usage_fallback": os.getenv("TOKEN_USAGE_FALLBACK"),
             "llm_stream_usage": os.getenv("LLM_STREAM_USAGE"),
+            "enable_source_provenance": os.getenv("ENABLE_SOURCE_PROVENANCE"),
         }
 
         for key, value in env_aliases.items():

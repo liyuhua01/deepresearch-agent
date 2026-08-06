@@ -15,6 +15,13 @@ from hello_agents.tools.builtin.note_tool import NoteTool
 
 from config import Configuration
 from evaluation.instrumented_llm import InstrumentedLLM
+from evaluation.provenance import (
+    add_catalog_to_context,
+    build_source_records,
+    extract_claim_mappings,
+    format_source_catalog,
+    serialize_records,
+)
 from evaluation.telemetry import RunRecorder
 from models import SummaryState, SummaryStateOutput, TodoItem
 from prompts import (
@@ -177,6 +184,8 @@ class DeepResearchAgent:
         self._raise_if_cancelled()
         with self.recorder.stage("reporting"):
             report = self.reporting.generate_report(state)
+        if self.config.enable_source_provenance:
+            self.recorder.record_provenance_audit(state.provenance_audit)
         self._drain_tool_events(state)
         state.structured_report = report
         state.running_summary = report
@@ -186,6 +195,7 @@ class DeepResearchAgent:
             running_summary=report,
             report_markdown=report,
             todo_items=state.todo_items,
+            provenance_audit=state.provenance_audit,
         )
 
     def run_stream(self, topic: str) -> Iterator[dict[str, Any]]:
@@ -330,6 +340,8 @@ class DeepResearchAgent:
         self._raise_if_cancelled()
         with self.recorder.stage("reporting"):
             report = self.reporting.generate_report(state)
+        if self.config.enable_source_provenance:
+            self.recorder.record_provenance_audit(state.provenance_audit)
         final_step = len(state.todo_items) + 1
         for event in self._drain_tool_events(state, step=final_step):
             yield event
@@ -340,12 +352,15 @@ class DeepResearchAgent:
         if note_event:
             yield note_event
 
-        yield {
+        final_report_event = {
             "type": "final_report",
             "report": report,
             "note_id": state.report_note_id,
             "note_path": state.report_note_path,
         }
+        if self.config.enable_source_provenance:
+            final_report_event["provenance_audit"] = state.provenance_audit
+        yield final_report_event
         yield {"type": "done"}
 
     # ------------------------------------------------------------------
@@ -420,6 +435,13 @@ class DeepResearchAgent:
             self.config,
         )
 
+        if self.config.enable_source_provenance:
+            task.source_records = build_source_records(search_result, task_id=task.id)
+            self.recorder.record_source_catalog(len(task.source_records))
+            if task.source_records:
+                sources_summary = format_source_catalog(task.source_records)
+                context = add_catalog_to_context(context, task.source_records)
+
         task.sources_summary = sources_summary
 
         with self._state_lock:
@@ -432,7 +454,7 @@ class DeepResearchAgent:
         if emit_stream:
             for event in self._drain_tool_events(state, step=step):
                 yield event
-            yield {
+            sources_event = {
                 "type": "sources",
                 "task_id": task.id,
                 "latest_sources": sources_summary,
@@ -442,6 +464,9 @@ class DeepResearchAgent:
                 "note_id": task.note_id,
                 "note_path": task.note_path,
             }
+            if self.config.enable_source_provenance:
+                sources_event["source_records"] = serialize_records(task.source_records)
+            yield sources_event
 
             with self.recorder.stage("summarization", task_id=task.id):
                 summary_stream, summary_getter = self.summarizer.stream_task_summary(
@@ -474,13 +499,26 @@ class DeepResearchAgent:
 
         self._raise_if_cancelled()
         task.summary = summary_text.strip() if summary_text else "暂无可用信息"
+        if self.config.enable_source_provenance:
+            task.claim_mappings = extract_claim_mappings(
+                task.summary,
+                task_id=task.id,
+                sources=task.source_records,
+            )
+            self.recorder.record_claim_provenance(
+                mapped=sum(bool(claim.source_ids) for claim in task.claim_mappings),
+                unmapped=sum(not claim.source_ids for claim in task.claim_mappings),
+                unknown_source_ids=sum(
+                    len(claim.unknown_source_ids) for claim in task.claim_mappings
+                ),
+            )
         task.status = "completed"
         self.recorder.record_task_status(task.id, "completed")
 
         if emit_stream:
             for event in self._drain_tool_events(state, step=step):
                 yield event
-            yield {
+            completed_event = {
                 "type": "task_status",
                 "task_id": task.id,
                 "status": "completed",
@@ -490,6 +528,11 @@ class DeepResearchAgent:
                 "note_path": task.note_path,
                 "step": step,
             }
+            if self.config.enable_source_provenance:
+                completed_event["claim_mappings"] = serialize_records(
+                    task.claim_mappings
+                )
+            yield completed_event
         else:
             self._drain_tool_events(state)
 
@@ -512,7 +555,7 @@ class DeepResearchAgent:
 
     def _serialize_task(self, task: TodoItem) -> dict[str, Any]:
         """Convert task dataclass to serializable dict for frontend."""
-        return {
+        payload = {
             "id": task.id,
             "title": task.title,
             "intent": task.intent,
@@ -524,6 +567,10 @@ class DeepResearchAgent:
             "note_path": task.note_path,
             "stream_token": task.stream_token,
         }
+        if self.config.enable_source_provenance:
+            payload["source_records"] = serialize_records(task.source_records)
+            payload["claim_mappings"] = serialize_records(task.claim_mappings)
+        return payload
 
     def _persist_final_report(self, state: SummaryState, report: str) -> dict[str, Any] | None:
         if not self.note_tool or not report or not report.strip():

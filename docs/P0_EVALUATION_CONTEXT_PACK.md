@@ -189,6 +189,26 @@ final_report -> metrics -> done
 - 不保存 API Key、Authorization Header、完整 Prompt、抓取正文和最终报告。
 - Render Free 本地文件会随重启或重新部署丢失；该层用于本地/预发布证据，长期历史需要外部数据库或对象存储。
 
+### 3.8 来源溯源与结论映射
+
+实施状态（2026-08-06）：已完成本地实现和非回归验收。53 项后端测试、前端生产构建和 Docker 构建通过；默认关闭时报告 Prompt、报告文本和非流式响应结构保持原样。开启后，过程映射和最终覆盖率会写入 schema `1.2` 的同一终态 JSON。尚未在预发布环境开启开关做真实模型 A/B 对照。
+
+新增 `evaluation/provenance.py`，在报告生成之前建立可追踪关系，而不是只在成品报告中猜测引用对应关系：
+
+```text
+任务 1 搜索结果 -> T1-S1、T1-S2
+任务 1 总结结论 -> T1-C1 -> [T1-S1]
+最终报告 -> 内联来源编号 -> 展开为来源标题与 URL
+最终复核 -> 目录来源复用率、目录外 URL、未映射结论、未知来源编号
+```
+
+- `source_id` 使用任务内稳定编号 `T{task_id}-S{index}`，不受并发完成顺序影响。
+- 总结阶段只允许引用本任务目录中的来源编号，没有证据的结论必须标记为待验证。
+- 报告阶段接收结构化结论—来源映射，并把裸编号确定性展开为可点击链接。
+- 原有 `sources`、`task_status`、`final_report` 事件类型保持不变，只在开关启用时增加可选字段。
+- 过程指标写入同一个终态 JSON，包括来源目录数、映射/未映射结论数、未知编号、报告来源复用率和目录外 URL 数。
+- `ENABLE_SOURCE_PROVENANCE=false` 是初始安全默认值；完成预发布对照验收后再开启。
+
 ## 4. 自动引用检查设计
 
 ### 4.1 运行位置
@@ -363,6 +383,7 @@ warnings
 | `ENABLE_INLINE_CITATION_AUDIT` | `false` | 在线请求是否执行网络引用检查 |
 | `TOKEN_USAGE_FALLBACK` | `unavailable` | usage 缺失时不默认做不可靠估算 |
 | `LLM_STREAM_USAGE` | `auto` | 仅为已知兼容端点请求流式 usage |
+| `ENABLE_SOURCE_PROVENANCE` | `false` | 启用稳定来源编号和结论—来源映射 |
 | `MODEL_PRICING_FILE` | 空 | 未配置时不计算费用 |
 
 任一评测模块异常时采用 fail-open（开放式降级：评测失败但原业务继续运行）：

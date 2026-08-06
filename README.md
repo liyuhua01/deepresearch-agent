@@ -122,6 +122,7 @@ npm run dev
 | `LLM_STREAM_USAGE` | 是否向兼容端点请求流式 Token usage | 否，默认 `auto` |
 | `MODEL_PRICING_FILE` | 可选模型价格 JSON；未配置时费用为 `null` | 否 |
 | `ENABLE_INLINE_CITATION_AUDIT` | 在线请求是否执行 URL 网络审计；当前保持关闭 | 否，默认 `false` |
+| `ENABLE_SOURCE_PROVENANCE` | 启用稳定来源编号和结论—来源映射 | 否，默认 `false` |
 
 服务暴露两个运维接口：`/healthz` 只检查进程是否存活；`/readyz` 检查必要配置并返回当日剩余额度。密钥不会写入镜像或提交到 Git。
 

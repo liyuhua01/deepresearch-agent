@@ -24,6 +24,7 @@ from agent import DeepResearchAgent, ResearchCancelledError
 from config import Configuration, SearchAPI
 from evaluation.persistence import RunMetricsStore
 from evaluation.pricing import load_pricing_catalog
+from evaluation.provenance import serialize_records
 from evaluation.telemetry import RunRecorder
 from runtime import (
     ResearchGate,
@@ -75,6 +76,7 @@ class ResearchResponse(BaseModel):
     job_id: str
     report_markdown: str
     todo_items: list[dict[str, Any]] = Field(default_factory=list)
+    provenance_audit: dict[str, Any] | None = None
 
 
 def _mask_secret(value: Optional[str], visible: int = 4) -> str:
@@ -241,7 +243,11 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.post("/research", response_model=ResearchResponse)
+    @app.post(
+        "/research",
+        response_model=ResearchResponse,
+        response_model_exclude_none=True,
+    )
     def run_research(payload: ResearchRequest, request: Request) -> ResearchResponse:
         recorder = _new_recorder(payload)
         try:
@@ -284,6 +290,14 @@ def create_app() -> FastAPI:
                 "sources_summary": item.sources_summary,
                 "note_id": item.note_id,
                 "note_path": item.note_path,
+                **(
+                    {
+                        "source_records": serialize_records(item.source_records),
+                        "claim_mappings": serialize_records(item.claim_mappings),
+                    }
+                    if config.enable_source_provenance
+                    else {}
+                ),
             }
             for item in result.todo_items
         ]
@@ -291,6 +305,9 @@ def create_app() -> FastAPI:
             job_id=payload.job_id,
             report_markdown=result.report_markdown or result.running_summary or "",
             todo_items=todo_payload,
+            provenance_audit=(
+                result.provenance_audit if config.enable_source_provenance else None
+            ),
         )
 
     @app.post("/research/stream")
