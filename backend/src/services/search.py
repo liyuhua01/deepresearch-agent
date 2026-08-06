@@ -7,6 +7,8 @@ from typing import Any, Optional, Tuple
 
 from hello_agents.tools import SearchTool
 
+from evaluation.telemetry import RunRecorder
+
 try:
     from ddgs import DDGS
 except Exception:  # pragma: no cover - dependency is validated at runtime
@@ -73,10 +75,14 @@ def dispatch_search(
     query: str,
     config: Configuration,
     loop_count: int,
+    recorder: RunRecorder | None = None,
 ) -> Tuple[dict[str, Any] | None, list[str], Optional[str], str]:
     """Execute configured search backend and normalise response payload."""
 
     search_api = get_config_value(config.search_api)
+    primary_outcome_recorded = False
+    if recorder:
+        recorder.record_search_attempt()
 
     try:
         raw_response = _GLOBAL_SEARCH_TOOL.run(
@@ -92,16 +98,22 @@ def dispatch_search(
         )
     except Exception as exc:  # pragma: no cover - provider errors vary by network
         logger.exception("Search backend %s failed: %s", search_api, exc)
+        if recorder:
+            recorder.record_search_failure()
+        primary_outcome_recorded = True
         if search_api != "duckduckgo":
             raise
-        raw_response = _ddgs_auto_fallback(query, max_results=5)
+        raw_response = _run_recorded_fallback(query, recorder=recorder)
 
     if (
         search_api == "duckduckgo"
         and isinstance(raw_response, dict)
         and not raw_response.get("results")
     ):
-        raw_response = _ddgs_auto_fallback(query, max_results=5)
+        if recorder:
+            recorder.record_search_failure(empty_result=True)
+        primary_outcome_recorded = True
+        raw_response = _run_recorded_fallback(query, recorder=recorder)
 
     if isinstance(raw_response, str):
         notices = [raw_response]
@@ -120,6 +132,12 @@ def dispatch_search(
     answer_text = payload.get("answer")
     results = payload.get("results", [])
 
+    if not primary_outcome_recorded and recorder:
+        if results:
+            recorder.record_search_success()
+        else:
+            recorder.record_search_failure(empty_result=True)
+
     if notices:
         for notice in notices:
             logger.info("Search notice (%s): %s", backend_label, notice)
@@ -133,6 +151,26 @@ def dispatch_search(
     )
 
     return payload, notices, answer_text, backend_label
+
+
+def _run_recorded_fallback(
+    query: str,
+    *,
+    recorder: RunRecorder | None,
+) -> dict[str, Any]:
+    """Run the existing fallback while recording only its outcome."""
+
+    if recorder:
+        recorder.record_fallback_trigger()
+    try:
+        payload = _ddgs_auto_fallback(query, max_results=5)
+    except Exception:
+        if recorder:
+            recorder.record_fallback_result(success=False)
+        raise
+    if recorder:
+        recorder.record_fallback_result(success=bool(payload.get("results")))
+    return payload
 
 
 def prepare_research_context(

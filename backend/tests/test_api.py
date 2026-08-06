@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+import main as main_module
+from config import Configuration
 from main import _register_job, _remove_job, app
 
 
@@ -45,3 +47,103 @@ def test_active_job_can_be_cancelled() -> None:
         assert cancel_event.is_set()
     finally:
         _remove_job(job_id)
+
+
+def test_streaming_api_finalizes_telemetry_without_changing_events(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, *, recorder, **_kwargs):
+            captured["recorder"] = recorder
+
+        def run_stream(self, _topic):
+            yield {"type": "status", "message": "working"}
+            yield {"type": "final_report", "report": "# report"}
+            yield {"type": "done"}
+
+    monkeypatch.setattr(main_module, "DeepResearchAgent", FakeAgent)
+    monkeypatch.setattr(
+        main_module,
+        "_validated_config",
+        lambda _payload: Configuration(enable_notes=False),
+    )
+    monkeypatch.setattr(main_module, "_consume_research_budget", lambda _request: None)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/research/stream",
+            json={"topic": "测试研究主题", "job_id": "metrics_api_job"},
+        )
+
+    assert response.status_code == 200
+    assert '"type": "status"' in response.text
+    assert '"type": "final_report"' in response.text
+    assert '"type": "done"' in response.text
+    assert '"type": "metrics"' not in response.text
+    assert captured["recorder"].snapshot()["status"] == "completed"
+
+
+def test_streaming_api_records_failure_without_changing_error_event(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    class FailingAgent:
+        def __init__(self, *, recorder, **_kwargs):
+            captured["recorder"] = recorder
+
+        def run_stream(self, _topic):
+            yield {"type": "status", "message": "working"}
+            raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(main_module, "DeepResearchAgent", FailingAgent)
+    monkeypatch.setattr(
+        main_module,
+        "_validated_config",
+        lambda _payload: Configuration(enable_notes=False),
+    )
+    monkeypatch.setattr(main_module, "_consume_research_budget", lambda _request: None)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/research/stream",
+            json={"topic": "测试研究主题", "job_id": "metrics_fail_job"},
+        )
+
+    assert response.status_code == 200
+    assert '"type": "error"' in response.text
+    assert '"type": "metrics"' not in response.text
+    metrics = captured["recorder"].snapshot()
+    assert metrics["status"] == "failed"
+    assert metrics["failure_type"] == "RuntimeError"
+
+
+def test_streaming_api_records_cancellation_without_changing_event(monkeypatch) -> None:
+    captured = {}
+
+    class CancelledAgent:
+        def __init__(self, *, recorder, **_kwargs):
+            captured["recorder"] = recorder
+
+        def run_stream(self, _topic):
+            yield {"type": "status", "message": "working"}
+            raise main_module.ResearchCancelledError("研究任务已取消")
+
+    monkeypatch.setattr(main_module, "DeepResearchAgent", CancelledAgent)
+    monkeypatch.setattr(
+        main_module,
+        "_validated_config",
+        lambda _payload: Configuration(enable_notes=False),
+    )
+    monkeypatch.setattr(main_module, "_consume_research_budget", lambda _request: None)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/research/stream",
+            json={"topic": "测试研究主题", "job_id": "metrics_cancel_job"},
+        )
+
+    assert response.status_code == 200
+    assert '"type": "cancelled"' in response.text
+    assert '"type": "metrics"' not in response.text
+    assert captured["recorder"].snapshot()["status"] == "cancelled"

@@ -59,3 +59,11 @@ def test_gate_enforces_daily_budget_across_clients() -> None:
 
     with pytest.raises(ResearchLimitExceeded, match="今日演示额度"):
         gate.consume("client-b")
+
+
+def test_run_telemetry_feature_flag_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENABLE_RUN_TELEMETRY", "false")
+
+    settings = RuntimeSettings.from_env()
+
+    assert settings.enable_run_telemetry is False

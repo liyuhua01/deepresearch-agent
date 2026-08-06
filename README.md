@@ -115,6 +115,7 @@ npm run dev
 | `RATE_LIMIT_WINDOW_SECONDS` | 限流窗口秒数 | 否，默认 3600 |
 | `DAILY_RESEARCH_BUDGET` | 整个实例每日最多研究次数 | 否，默认 20 |
 | `MAX_WEB_RESEARCH_LOOPS` | 一次研究的最大检索轮数 | 否，默认 3 |
+| `ENABLE_RUN_TELEMETRY` | 启用轻量运行埋点；只在内存记录阶段、任务和搜索指标，不改变前端事件 | 否，默认 `true` |
 
 服务暴露两个运维接口：`/healthz` 只检查进程是否存活；`/readyz` 检查必要配置并返回当日剩余额度。密钥不会写入镜像或提交到 Git。
 
@@ -128,6 +129,7 @@ npm run dev
 
 - 固定题目、指标定义和记录表：[`docs/DEMO_BENCHMARK.md`](./docs/DEMO_BENCHMARK.md)
 - 30～60 秒录屏脚本：[`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md)
+- 三个 P0 的统一评测数据链路、非回归契约与 Render 灰度部署方案：[`docs/P0_EVALUATION_CONTEXT_PACK.md`](./docs/P0_EVALUATION_CONTEXT_PACK.md)
 
 建议至少记录：总耗时、子任务数量、引用数量、可访问引用比例、是否成功、失败阶段。这样项目展示重点会从“我部署了一个教程项目”变成“我能对 Agent 系统做工程化、成本控制和质量评估”。
 

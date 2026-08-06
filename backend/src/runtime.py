@@ -24,6 +24,18 @@ def _positive_int(name: str, default: int) -> int:
     return value
 
 
+def _boolean(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} 必须是布尔值，当前值为 {raw!r}")
+
+
 @dataclass(frozen=True)
 class RuntimeSettings:
     """Settings that control deployment, access and demo cost boundaries."""
@@ -34,6 +46,7 @@ class RuntimeSettings:
     rate_limit_window_seconds: int
     daily_research_budget: int
     frontend_dist_dir: Path
+    enable_run_telemetry: bool
 
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
@@ -56,6 +69,7 @@ class RuntimeSettings:
             rate_limit_window_seconds=_positive_int("RATE_LIMIT_WINDOW_SECONDS", 3600),
             daily_research_budget=_positive_int("DAILY_RESEARCH_BUDGET", 20),
             frontend_dist_dir=frontend_dir,
+            enable_run_telemetry=_boolean("ENABLE_RUN_TELEMETRY", True),
         )
 
 

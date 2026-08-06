@@ -22,13 +22,13 @@ from pydantic import BaseModel, Field
 
 from agent import DeepResearchAgent, ResearchCancelledError
 from config import Configuration, SearchAPI
+from evaluation.telemetry import RunRecorder
 from runtime import (
     ResearchGate,
     ResearchLimitExceeded,
     RuntimeSettings,
     research_configuration_errors,
 )
-
 
 logger.remove()
 logger.add(
@@ -215,15 +215,32 @@ def create_app() -> FastAPI:
 
     @app.post("/research", response_model=ResearchResponse)
     def run_research(payload: ResearchRequest, request: Request) -> ResearchResponse:
-        config = _validated_config(payload)
-        _consume_research_budget(request)
+        recorder = RunRecorder(
+            run_id=payload.job_id,
+            topic=payload.topic,
+            enabled=runtime_settings.enable_run_telemetry,
+        )
+        try:
+            with recorder.stage("configuration"):
+                config = _validated_config(payload)
+                _consume_research_budget(request)
+        except Exception as exc:
+            recorder.mark_failed(exc, stage="configuration")
+            raise
         cancel_event = _register_job(payload.job_id)
         try:
-            agent = DeepResearchAgent(config=config, cancel_event=cancel_event)
+            agent = DeepResearchAgent(
+                config=config,
+                cancel_event=cancel_event,
+                recorder=recorder,
+            )
             result = agent.run(payload.topic)
+            recorder.mark_completed()
         except ResearchCancelledError as exc:
+            recorder.mark_cancelled()
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
+            recorder.mark_failed(exc)
             logger.exception("Research job {} failed", payload.job_id)
             raise HTTPException(
                 status_code=502,
@@ -254,21 +271,38 @@ def create_app() -> FastAPI:
 
     @app.post("/research/stream")
     def stream_research(payload: ResearchRequest, request: Request) -> StreamingResponse:
-        config = _validated_config(payload)
-        _consume_research_budget(request)
+        recorder = RunRecorder(
+            run_id=payload.job_id,
+            topic=payload.topic,
+            enabled=runtime_settings.enable_run_telemetry,
+        )
+        try:
+            with recorder.stage("configuration"):
+                config = _validated_config(payload)
+                _consume_research_budget(request)
+        except Exception as exc:
+            recorder.mark_failed(exc, stage="configuration")
+            raise
         cancel_event = _register_job(payload.job_id)
 
         def event_iterator() -> Iterator[str]:
             try:
-                agent = DeepResearchAgent(config=config, cancel_event=cancel_event)
+                agent = DeepResearchAgent(
+                    config=config,
+                    cancel_event=cancel_event,
+                    recorder=recorder,
+                )
                 yield f"data: {json.dumps({'type': 'job', 'job_id': payload.job_id}, ensure_ascii=False)}\n\n"
                 for event in agent.run_stream(payload.topic):
                     event.setdefault("job_id", payload.job_id)
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                recorder.mark_completed()
             except ResearchCancelledError:
+                recorder.mark_cancelled()
                 event = {"type": "cancelled", "job_id": payload.job_id, "message": "研究任务已取消"}
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except Exception as exc:
+                recorder.mark_failed(exc)
                 logger.exception("Streaming research job {} failed", payload.job_id)
                 event = {
                     "type": "error",
@@ -277,6 +311,15 @@ def create_app() -> FastAPI:
                 }
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             finally:
+                try:
+                    if recorder.snapshot()["status"] == "running":
+                        recorder.mark_cancelled(stage="streaming")
+                except Exception as exc:  # pragma: no cover - telemetry must fail open
+                    logger.warning(
+                        "Telemetry finalization failed for job {}: {}",
+                        payload.job_id,
+                        exc,
+                    )
                 cancel_event.set()
                 _remove_job(payload.job_id)
 

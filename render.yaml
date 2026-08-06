@@ -26,6 +26,8 @@ services:
         value: "3"
       - key: FETCH_FULL_PAGE
         value: "true"
+      - key: ENABLE_RUN_TELEMETRY
+        value: "true"
       - key: APP_ACCESS_PASSWORD
         sync: false
       - key: RATE_LIMIT_REQUESTS

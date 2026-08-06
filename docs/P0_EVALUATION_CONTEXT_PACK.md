@@ -1,0 +1,489 @@
+# Deep Research Agent P0 评测链路 Context Pack
+
+> 状态：设计冻结；Phase A 已实现，等待预发布 Render 验收
+>
+> 适用范围：运行埋点、自动引用检查、固定评测执行器
+>
+> 第一原则：在现有研究能力上增加旁路评测能力，不改变或削弱已完成的研究流程。
+
+## 1. 目标与非目标
+
+### 1.1 本阶段目标
+
+建立一条统一、可追踪、可导出的评测数据链路：
+
+```text
+研究请求（run_id）
+  -> 运行记录器
+  -> Agent 阶段计时
+  -> LLM / 搜索调用统计
+  -> 原有最终报告
+  -> 报告完成后的引用审计
+  -> 单次 JSON 结果
+  -> 批量 CSV / JSON 汇总
+```
+
+完成后能够回答：任务是否成功、失败发生在哪个阶段、耗时多少、调用了多少次模型、消耗了多少 Token、搜索是否失败或降级、报告引用是否可访问、主要结论是否有引用，以及固定 8 题的整体完成率和分位耗时。
+
+### 1.2 非目标
+
+本阶段不做以下改变：
+
+- 不替换 HelloAgents，不重写 Planning、Summarization 或 Reporting Agent。
+- 不改变现有 Prompt（提示词：约束模型规划、总结和报告输出的文本指令）。
+- 不改变现有 `/research`、`/research/stream`、`/research/{job_id}/cancel` 请求格式。
+- 不改变前端现有任务规划、来源、阶段总结、工具调用、取消和最终报告交互。
+- 不把 PostgreSQL、Redis、消息队列或多实例部署作为三个 P0 的前置条件。
+- 不在 P0 阶段宣称“引用支持率”；自动程序先实现引用可访问率和结论引用覆盖率，语义支持率留待独立评审。
+
+## 2. 当前系统基线
+
+### 2.1 已完成能力
+
+- Vue 3 + TypeScript 前端展示研究进度、子任务、来源、总结和最终报告。
+- FastAPI 通过 SSE（服务器发送事件：服务端持续向浏览器推送进度）提供流式研究结果。
+- 研究主题由规划、搜索、总结、报告四个主要阶段组成。
+- 多个研究子任务使用线程并发执行。
+- 支持 DuckDuckGo、Tavily、Perplexity、SearXNG；DuckDuckGo 失败或空结果时自动降级到 DDGS 多引擎搜索。
+- 支持 Ollama、LM Studio 和 OpenAI-compatible API（兼容 OpenAI 请求格式的模型服务）。
+- 已有 `job_id`、协作式取消、明确错误事件、Basic Auth、按 IP 限流、每日预算、健康检查和配置就绪检查。
+- Vue 静态资源和 FastAPI 后端使用一个 Docker 镜像，在 Render 单 Web Service 中部署。
+
+### 2.2 2026-08-06 非回归基线
+
+```text
+后端：8 passed
+前端：vue-tsc --noEmit 通过
+前端：vite production build 通过
+当前 Git 提交：67e459f Add resilient search fallback
+```
+
+每个实施阶段开始前和合并前都必须重新运行：
+
+```bash
+cd backend && uv run pytest -q
+cd ../frontend && npm run build
+```
+
+### 2.3 必须保持的外部契约
+
+| 契约 | 当前行为 | P0 要求 |
+|---|---|---|
+| `POST /research/stream` | 接收 `topic`、可选 `search_api`、`job_id` | 请求字段保持不变 |
+| SSE 事件 | 现有事件持续推送，最终以 `done` 结束 | 不删除、不重命名、不改变现有字段含义 |
+| 取消接口 | 按 `job_id` 设置取消信号 | 路径、状态码和返回结构保持兼容 |
+| 错误行为 | 配置错误返回 503；运行错误通过 SSE `error` 反馈 | 新埋点不得吞掉或替换原错误 |
+| 搜索降级 | DuckDuckGo 失败或空结果切换 DDGS | 只记录，不改变触发条件 |
+| 最终报告 | `final_report` 事件携带 Markdown 报告 | 引用审计不得修改报告正文 |
+| 健康检查 | `/healthz` 和 `/readyz` 对外公开 | 新模块失败不得让 `/healthz` 失败 |
+
+## 3. 统一数据链路设计
+
+### 3.1 标识符
+
+第一阶段定义 `run_id = job_id`。客户端仍使用现有 `job_id` 发起和取消任务，评测记录内部统一称为 `run_id`，避免同时维护两个生命周期相同的标识符。
+
+批量评测执行器生成不可重复的 ID，例如：
+
+```text
+Q05-20260806T153012-7f31c2d8
+```
+
+### 3.2 RunRecorder
+
+新增 `backend/src/evaluation/telemetry.py`，提供线程安全的 `RunRecorder`。它只收集数据，不决定 Agent 的业务流程。
+
+核心职责：
+
+- 记录开始、结束、成功、失败和取消状态。
+- 记录配置、规划、搜索、抓取、总结、报告等阶段耗时。
+- 记录规划、完成、失败、跳过的子任务数量。
+- 累加 LLM 调用次数、Token 和费用。
+- 累加搜索尝试、失败、降级触发和降级恢复。
+- 输出只包含可公开评测字段的快照，不输出 API Key、完整 Prompt 或抓取正文。
+
+并发安全要求：
+
+- 计数器和集合写入使用 `threading.Lock`。
+- 当前阶段与 `task_id` 使用 `threading.local()` 隔离。
+- 端到端耗时使用单调时钟 `time.perf_counter()`。
+- 并发子任务的阶段耗时可以分别记录，但不得相加后冒充端到端耗时。
+- 只记录第一次导致整项研究失败的 `failure_stage`；子任务局部失败另存明细。
+
+### 3.3 阶段模型
+
+固定阶段名，避免后续 CSV 出现多个同义字段：
+
+```text
+configuration
+planning
+search
+fetch
+summarization
+reporting
+streaming
+citation_audit
+```
+
+阶段上下文管理器的语义：
+
+```python
+with recorder.stage("planning"):
+    todo_items = planner.plan_todo_list(state)
+```
+
+- 正常退出：累计耗时并标记成功。
+- 异常退出：记录耗时、错误类型和失败阶段，然后原样重新抛出异常。
+- 取消：记录 `cancelled`，继续沿用现有 `ResearchCancelledError`。
+
+### 3.4 LLM 统计
+
+新增 `backend/src/evaluation/instrumented_llm.py`，包装当前 `HelloAgentsLLM`：
+
+- 保持 `invoke()` 和 `stream_invoke()` 的调用签名及文本输出不变。
+- 非流式调用从 `response.usage` 读取真实 Token。
+- 流式调用优先使用 `stream_options={"include_usage": true}` 获取最终 usage。
+- 提供商不支持 usage 时，允许 Tokenizer Estimate（分词器估算：根据模型分词规则近似计算 Token）作为降级，但必须保存 `usage_source=estimated`。
+- 无可靠分词器时保存 `usage_source=unavailable`，不得填入伪造的 0。
+- 单次 LLM 调用统计失败不能导致研究任务失败；只把指标标记为不完整。
+
+模型费用从独立价格配置读取。价格缺失时 `estimated_cost` 必须为 `null`，不能猜测单价。
+
+### 3.5 搜索统计
+
+在 `dispatch_search()` 的现有控制分支旁增加记录调用，不改变返回结构和降级条件：
+
+- 原始后端与实际后端。
+- 查询哈希、开始时间、耗时、结果数量。
+- 主搜索成功、异常或空结果。
+- 是否触发 DDGS 降级。
+- 降级是否返回有效结果。
+- 错误类型；不保存完整异常栈到公开结果。
+
+核心计算口径：
+
+```text
+搜索失败率 = 主搜索失败或空结果次数 / 主搜索尝试次数
+降级恢复成功率 = 降级后取得有效结果次数 / 降级触发次数
+```
+
+### 3.6 终态指标事件
+
+为 SSE 增加新的可选 `metrics` 事件，但必须放在现有 `done` 之前：
+
+```text
+final_report -> metrics -> done
+```
+
+旧前端会忽略未知事件，因此保持向后兼容；新前端未来可以选择显示指标。失败和取消路径也应尽力发送 `metrics`，确保评测不会只保存成功样本。
+
+若指标序列化失败：记录服务端日志并继续发送原有 `done` 或 `error`，不得破坏原研究结果。
+
+## 4. 自动引用检查设计
+
+### 4.1 运行位置
+
+引用审计是报告完成后的旁路任务：
+
+- 不修改 Agent 的输入、上下文或最终报告。
+- 不影响 `final_report` 的生成成功判定。
+- `total_duration_ms` 在报告生成完成时停止。
+- 引用审计耗时单独保存为 `citation_audit_duration_ms`。
+- 在线交互默认不等待完整 URL 网络检查；固定评测执行器在收到报告后执行完整审计。
+
+该边界保证引用站点缓慢、403 或超时不会让原有研究功能失败。
+
+### 4.2 提取与去重
+
+新增：
+
+```text
+backend/src/evaluation/citations.py
+backend/src/evaluation/domains.py
+```
+
+需要识别 Markdown 链接、裸 URL 和脚注 URL。规范化时：
+
+- 域名转小写。
+- 移除 `#fragment`。
+- 移除 `utm_*` 等明确追踪参数。
+- 移除默认端口。
+- 保留可能改变页面内容的查询参数。
+- 同时保留 `raw_url` 和 `normalized_url`，用后者去重。
+
+### 4.3 可访问性检测
+
+固定评测执行器使用异步 HTTP 客户端，最大并发 8：
+
+- 先尝试 `HEAD`，不支持时回退到受限大小的流式 `GET`。
+- 跟随最多 5 次重定向。
+- 单链接超时 10 秒，最多重试 1 次。
+- 不下载完整大文件。
+- 状态分类为 `accessible`、`authentication`、`forbidden`、`not_found`、`timeout`、`dns_error`、`ssl_error`、`server_error`、`invalid_url`。
+
+只有无需登录且能读取有效内容的链接计入“可访问”。
+
+### 4.4 域名分类
+
+第一阶段只做可解释的来源类型分类：政府/监管机构、学术论文、官方技术文档、新闻媒体、企业官网、社区内容、未知。分类描述来源类型，不等同于内容质量评分。
+
+### 4.5 结论引用覆盖率
+
+把 Markdown 按正文段落和列表项拆成 Claim Unit（结论单元：可以单独判断是否需要外部证据的一段正文或一个要点），排除标题、目录和纯结构性语句，然后计算：
+
+```text
+结论引用覆盖率 = 含至少一个引用的结论单元 / 需要证据的结论单元
+```
+
+这一指标只代表“结论附近是否有引用”，不代表引用在语义上真正支持结论。
+
+## 5. 固定评测执行器设计
+
+### 5.1 题库
+
+把现有 `docs/DEMO_BENCHMARK.md` 的 8 道题复制为机器可读题库：
+
+```text
+backend/benchmarks/questions.json
+```
+
+每题包含 `id`、`category`、`topic`、`time_limit_seconds` 和 `minimum_unique_citations`。文档继续作为人类阅读版本，JSON 是执行权威源；后续用校验测试防止两者长期漂移。
+
+### 5.2 执行路径
+
+新增 `backend/scripts/run_benchmark.py`，默认通过真实 `/research/stream` API 执行，而不是绕过 Web 层直接调用 Agent，以覆盖 HTTP、FastAPI、SSE、取消和错误反馈。
+
+执行器必须：
+
+- 生成唯一 `run_id`。
+- 解析并保存 SSE 原始终态事件。
+- 在超时后调用现有取消接口。
+- 单题失败后继续下一题。
+- 支持 `--resume`，跳过已经有完整结果的运行。
+- 默认串行发题，避免多个顶层研究互相竞争资源。
+- 对最终报告执行引用审计。
+- 输出逐次 JSON 和汇总 JSON/CSV。
+
+### 5.3 产物结构
+
+```text
+backend/benchmarks/results/<timestamp>/
+  manifest.json
+  runs/Q01-run-01.json
+  reports/Q01-run-01.md
+  summary.json
+  summary.csv
+```
+
+`manifest.json` 必须记录 Git commit、模型、搜索后端、检索轮数、是否并发、是否启用搜索降级和评测开始时间。不得记录密钥。
+
+原始运行结果默认不提交 Git；经过人工检查、脱敏的汇总报告可以提交到 `docs/benchmarks/`。
+
+### 5.4 Render 配额处理
+
+当前默认配置是每 IP 每小时 5 次、实例每日 20 次研究，而固定题库包含 8 题。因此完整评测不能在未知公开访问者共享的生产配额中直接连续运行。
+
+推荐路径：
+
+1. 使用与 Render 镜像相同的 Docker 镜像，在本地或独立预发布 Render Service 上运行完整 8 题。
+2. 预发布服务使用独立模型预算和访问密码，临时把频率上限调到覆盖评测规模。
+3. 完成后恢复或删除预发布服务，不修改公开演示服务的保护参数。
+4. 公网生产服务只做 1～2 道烟雾验证，确认真实 HTTPS、SSE 和模型配置可用。
+
+不建议为评测在生产接口里加入隐藏的“免限流后门”。
+
+## 6. 数据契约
+
+单次 JSON 至少包含：
+
+```text
+schema_version
+run_id
+question_id
+topic
+git_commit
+model
+search_api
+started_at
+finished_at
+status
+failure_stage
+failure_type
+total_duration_ms
+stage_durations_ms
+planned_subtasks
+completed_subtasks
+failed_subtasks
+llm_calls
+prompt_tokens
+completion_tokens
+total_tokens
+usage_source
+estimated_cost
+cost_currency
+search_attempts
+search_failures
+fallback_triggers
+fallback_successes
+citation_count_raw
+citation_count_unique
+citation_accessible_count
+citation_accessibility_rate
+domain_count
+claim_units
+claim_units_with_citations
+claim_citation_coverage
+report_path
+metrics_complete
+warnings
+```
+
+所有比率保存 0～1 的原始小数，展示层再转换为百分比。分母为 0 时保存 `null`，不能用 0 混淆“没有发生”和“发生但全部失败”。
+
+## 7. 功能开关与安全降级
+
+新增环境变量，默认值以保护原行为为原则：
+
+| 变量 | 默认值 | 作用 |
+|---|---:|---|
+| `ENABLE_RUN_TELEMETRY` | `true` | 收集轻量运行指标 |
+| `EMIT_METRICS_EVENT` | `false` | 是否向 SSE 客户端发送指标事件 |
+| `ENABLE_INLINE_CITATION_AUDIT` | `false` | 在线请求是否执行网络引用检查 |
+| `TOKEN_USAGE_FALLBACK` | `unavailable` | usage 缺失时不默认做不可靠估算 |
+| `MODEL_PRICING_FILE` | 空 | 未配置时不计算费用 |
+
+任一评测模块异常时采用 fail-open（开放式降级：评测失败但原业务继续运行）：
+
+```text
+埋点异常 -> metrics_complete=false -> 原研究继续
+Token 读取失败 -> usage_source=unavailable -> 原模型输出继续
+引用检查失败 -> 保存 warning -> 原报告保持成功
+CSV 汇总失败 -> 保留逐次 JSON -> 不重新消耗模型运行
+```
+
+## 8. 分阶段实施与验收门
+
+### Phase A：只增加运行记录器
+
+实施状态（2026-08-06）：已完成代码接入。新增记录器保持在请求内存中，不发送 `metrics` SSE 事件；原始研究输出、取消和错误事件保持兼容。进入 Phase B 前仍需完成预发布 Render 验收。
+
+改动范围：数据模型、阶段计时、失败阶段、子任务和搜索计数。不开启 SSE 指标事件，不做引用网络请求。
+
+验收：
+
+- 原 8 项后端测试全部通过。
+- 前端生产构建通过。
+- 新增并发写入、成功、失败、取消测试。
+- 使用假的 LLM / 搜索依赖完成一次确定性运行，原事件序列不变。
+
+### Phase B：增加 LLM usage
+
+改动范围：模型包装与 usage 统计。保持 Agent 调用接口和文本结果不变。
+
+验收：
+
+- 非流式和流式输出字符序列与包装前一致。
+- 真实 usage、估算 usage、不可用三种状态均有测试。
+- 指标异常不能导致研究失败。
+
+### Phase C：增加引用审计库
+
+改动范围：纯函数提取/分类与评测端网络检查。在线默认关闭完整审计。
+
+验收：
+
+- 使用固定 Markdown Fixture（测试样本）验证提取、规范化、去重和覆盖率。
+- 所有网络状态使用 Mock（模拟响应）测试，不依赖外网通过 CI。
+- 审计失败不会改变最终报告或研究状态。
+
+### Phase D：增加固定评测执行器
+
+改动范围：题库、CLI、JSON/CSV 汇总，不改前端。
+
+验收：
+
+- 使用假的 SSE 服务完成 8 题批跑测试。
+- 验证超时取消、失败继续、断点恢复和幂等汇总。
+- 在预发布环境完成至少 1 道真实题，再运行完整 8 题。
+
+### Phase E：Render 灰度发布
+
+顺序：
+
+1. 构建与当前一致的 Docker 镜像。
+2. 部署预发布 Render Service。
+3. 验证 `/healthz`、`/readyz`、登录、研究、取消、错误展示。
+4. 运行 1 道端到端题并检查报告与原版本体验一致。
+5. 完整跑 8 题和引用审计。
+6. 再部署公开演示服务；初次部署保持 `EMIT_METRICS_EVENT=false`、`ENABLE_INLINE_CITATION_AUDIT=false`。
+7. 验证无回归后，按需开启只读指标事件。
+
+## 9. 回滚策略
+
+- 新增功能全部受环境变量控制；首先关闭引用审计和指标事件，不需要回滚镜像。
+- 运行记录器本身异常时自动 fail-open，不阻止请求。
+- Render 保留上一个成功部署；新版本研究主链路异常时回滚到上一个镜像/提交。
+- 评测产物与运行服务解耦，删除或重建汇总不会影响研究业务。
+- 不在本阶段进行数据库迁移，因此没有数据结构回滚风险。
+
+## 10. 需要新增的测试
+
+至少新增以下测试，现有测试不得删除或放宽断言：
+
+1. 阶段正常结束、异常和取消都记录正确。
+2. 多线程写入不会丢失或重复计数。
+3. 端到端耗时不等于并发阶段耗时简单相加。
+4. 非流式 LLM usage 统计正确。
+5. 流式 usage 统计正确且输出片段不变。
+6. usage 不可用时不影响模型输出。
+7. 主搜索异常触发降级并正确计数。
+8. 主搜索空结果触发降级并正确计数。
+9. Markdown 链接、裸 URL、脚注提取与去重正确。
+10. URL 重定向、403、404、超时和 DNS 错误分类正确。
+11. 结论引用覆盖率分母为 0 时返回 `null`。
+12. SSE 失败和取消路径仍能保留原事件，并可选输出 metrics。
+13. CLI 单题失败后继续下一题。
+14. CLI 超时后调用取消接口。
+15. CLI `--resume` 不重复产生模型费用。
+16. JSON 和 CSV 汇总数值一致。
+17. 输出中不包含 API Key、Authorization Header、完整 Prompt 或抓取正文。
+
+## 11. Definition of Done
+
+三个 P0 完成必须同时满足：
+
+- 当前研究功能与前端体验没有可观察回归。
+- 原 8 项后端测试和前端生产构建持续通过。
+- 新增评测测试全部通过，且没有依赖真实外网的 CI 测试。
+- 单次运行可生成 schema 固定的 JSON。
+- 8 题批量执行可生成可复算的 JSON 和 CSV。
+- 成功、失败、取消均有运行记录。
+- Token 明确区分真实、估算和不可用。
+- 引用检查明确区分可访问率、覆盖率和支持率。
+- 评测模块故障不会阻断最终报告。
+- Render 预发布完成研究、取消、错误和健康检查验收后，才允许更新公开演示服务。
+
+## 12. 建议文件变更地图
+
+```text
+backend/src/evaluation/__init__.py             新增
+backend/src/evaluation/telemetry.py            新增
+backend/src/evaluation/instrumented_llm.py     新增
+backend/src/evaluation/citations.py            新增
+backend/src/evaluation/domains.py              新增
+backend/src/agent.py                           小范围接入 RunRecorder
+backend/src/main.py                            建立 run_id、可选 metrics 事件
+backend/src/services/search.py                 增加旁路搜索统计
+backend/src/config.py                          增加功能开关
+backend/benchmarks/questions.json              新增机器可读题库
+backend/scripts/run_benchmark.py               新增批量执行器
+backend/tests/test_telemetry.py                 新增
+backend/tests/test_instrumented_llm.py          新增
+backend/tests/test_citations.py                 新增
+backend/tests/test_benchmark_runner.py          新增
+docs/DEMO_BENCHMARK.md                         补充运行命令和真实结果
+docs/DEPLOYMENT.md                             补充预发布与功能开关
+render.yaml                                    仅增加安全的默认开关
+```
+
+控制原则是“小范围接入、核心算法不重写、默认不增加在线网络开销、每个阶段都有独立回滚点”。

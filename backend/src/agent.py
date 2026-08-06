@@ -14,12 +14,13 @@ from hello_agents.tools import ToolRegistry
 from hello_agents.tools.builtin.note_tool import NoteTool
 
 from config import Configuration
+from evaluation.telemetry import RunRecorder
+from models import SummaryState, SummaryStateOutput, TodoItem
 from prompts import (
     report_writer_instructions,
     task_summarizer_instructions,
     todo_planner_system_prompt,
 )
-from models import SummaryState, SummaryStateOutput, TodoItem
 from services.planner import PlanningService
 from services.reporter import ReportingService
 from services.search import dispatch_search, prepare_research_context
@@ -40,10 +41,16 @@ class DeepResearchAgent:
         self,
         config: Configuration | None = None,
         cancel_event: Event | None = None,
+        recorder: RunRecorder | None = None,
     ) -> None:
         """Initialise the coordinator with configuration and shared tools."""
         self.config = config or Configuration.from_env()
         self.cancel_event = cancel_event or Event()
+        self.recorder = recorder or RunRecorder(
+            run_id="untracked",
+            topic="",
+            enabled=False,
+        )
         self.llm = self._init_llm()
 
         self.note_tool = (
@@ -139,21 +146,31 @@ class DeepResearchAgent:
         """Execute the research workflow and return the final report."""
         self._raise_if_cancelled()
         state = SummaryState(research_topic=topic)
-        state.todo_items = self.planner.plan_todo_list(state)
+        with self.recorder.stage("planning"):
+            state.todo_items = self.planner.plan_todo_list(state)
         self._raise_if_cancelled()
         self._drain_tool_events(state)
 
         if not state.todo_items:
             logger.info("No TODO items generated; falling back to single task")
             state.todo_items = [self.planner.create_fallback_task(state)]
+        self.recorder.record_tasks_planned(len(state.todo_items))
 
         for task in state.todo_items:
             self._raise_if_cancelled()
-            for _ in self._execute_task(state, task, emit_stream=False):
-                pass
+            try:
+                for _ in self._execute_task(state, task, emit_stream=False):
+                    pass
+            except ResearchCancelledError:
+                self.recorder.record_task_status(task.id, "cancelled")
+                raise
+            except Exception:
+                self.recorder.record_task_status(task.id, "failed")
+                raise
 
         self._raise_if_cancelled()
-        report = self.reporting.generate_report(state)
+        with self.recorder.stage("reporting"):
+            report = self.reporting.generate_report(state)
         self._drain_tool_events(state)
         state.structured_report = report
         state.running_summary = report
@@ -172,12 +189,14 @@ class DeepResearchAgent:
         logger.debug("Starting streaming research: topic=%s", topic)
         yield {"type": "status", "message": "初始化研究流程"}
 
-        state.todo_items = self.planner.plan_todo_list(state)
+        with self.recorder.stage("planning"):
+            state.todo_items = self.planner.plan_todo_list(state)
         self._raise_if_cancelled()
         for event in self._drain_tool_events(state, step=0):
             yield event
         if not state.todo_items:
             state.todo_items = [self.planner.create_fallback_task(state)]
+        self.recorder.record_tasks_planned(len(state.todo_items))
 
         channel_map: dict[int, dict[str, Any]] = {}
         for index, task in enumerate(state.todo_items, start=1):
@@ -223,6 +242,7 @@ class DeepResearchAgent:
         def worker(task: TodoItem, step: int) -> None:
             try:
                 self._raise_if_cancelled()
+                self.recorder.record_task_status(task.id, "in_progress")
                 enqueue(
                     {
                         "type": "task_status",
@@ -239,6 +259,7 @@ class DeepResearchAgent:
                 for event in self._execute_task(state, task, emit_stream=True, step=step):
                     enqueue(event, task=task)
             except ResearchCancelledError:
+                self.recorder.record_task_status(task.id, "cancelled")
                 enqueue(
                     {
                         "type": "task_status",
@@ -249,6 +270,7 @@ class DeepResearchAgent:
                     task=task,
                 )
             except Exception as exc:  # pragma: no cover - defensive guardrail
+                self.recorder.record_task_status(task.id, "failed")
                 logger.exception("Task execution failed", exc_info=exc)
                 enqueue(
                     {
@@ -300,7 +322,8 @@ class DeepResearchAgent:
                 thread.join(timeout=0.1 if self.cancel_event.is_set() else None)
 
         self._raise_if_cancelled()
-        report = self.reporting.generate_report(state)
+        with self.recorder.stage("reporting"):
+            report = self.reporting.generate_report(state)
         final_step = len(state.todo_items) + 1
         for event in self._drain_tool_events(state, step=final_step):
             yield event
@@ -333,12 +356,15 @@ class DeepResearchAgent:
         """Run search + summarization for a single task."""
         self._raise_if_cancelled()
         task.status = "in_progress"
+        self.recorder.record_task_status(task.id, "in_progress")
 
-        search_result, notices, answer_text, backend = dispatch_search(
-            task.query,
-            self.config,
-            state.research_loop_count,
-        )
+        with self.recorder.stage("search", task_id=task.id):
+            search_result, notices, answer_text, backend = dispatch_search(
+                task.query,
+                self.config,
+                state.research_loop_count,
+                recorder=self.recorder,
+            )
         self._raise_if_cancelled()
         self._last_search_notices = notices
         task.notices = notices
@@ -361,6 +387,7 @@ class DeepResearchAgent:
 
         if not search_result or not search_result.get("results"):
             task.status = "skipped"
+            self.recorder.record_task_status(task.id, "skipped")
             if emit_stream:
                 for event in self._drain_tool_events(state, step=step):
                     yield event
@@ -410,32 +437,39 @@ class DeepResearchAgent:
                 "note_path": task.note_path,
             }
 
-            summary_stream, summary_getter = self.summarizer.stream_task_summary(state, task, context)
-            try:
-                for event in self._drain_tool_events(state, step=step):
-                    yield event
-                for chunk in summary_stream:
-                    self._raise_if_cancelled()
-                    if chunk:
-                        yield {
-                            "type": "task_summary_chunk",
-                            "task_id": task.id,
-                            "content": chunk,
-                            "note_id": task.note_id,
-                            "step": step,
-                        }
+            with self.recorder.stage("summarization", task_id=task.id):
+                summary_stream, summary_getter = self.summarizer.stream_task_summary(
+                    state,
+                    task,
+                    context,
+                )
+                try:
                     for event in self._drain_tool_events(state, step=step):
                         yield event
-            finally:
-                summary_text = summary_getter()
+                    for chunk in summary_stream:
+                        self._raise_if_cancelled()
+                        if chunk:
+                            yield {
+                                "type": "task_summary_chunk",
+                                "task_id": task.id,
+                                "content": chunk,
+                                "note_id": task.note_id,
+                                "step": step,
+                            }
+                        for event in self._drain_tool_events(state, step=step):
+                            yield event
+                finally:
+                    summary_text = summary_getter()
         else:
             self._raise_if_cancelled()
-            summary_text = self.summarizer.summarize_task(state, task, context)
+            with self.recorder.stage("summarization", task_id=task.id):
+                summary_text = self.summarizer.summarize_task(state, task, context)
             self._drain_tool_events(state)
 
         self._raise_if_cancelled()
         task.summary = summary_text.strip() if summary_text else "暂无可用信息"
         task.status = "completed"
+        self.recorder.record_task_status(task.id, "completed")
 
         if emit_stream:
             for event in self._drain_tool_events(state, step=step):

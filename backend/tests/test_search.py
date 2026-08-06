@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from config import Configuration, SearchAPI
+from evaluation.telemetry import RunRecorder
 from services import search
 
 
 def test_duckduckgo_failure_uses_multi_engine_fallback(monkeypatch) -> None:
+    recorder = RunRecorder(run_id="search_failure", topic="test")
+
     def fail_direct_search(_parameters):
         raise RuntimeError("DuckDuckGo 搜索失败: No results found.")
 
@@ -35,15 +38,22 @@ def test_duckduckgo_failure_uses_multi_engine_fallback(monkeypatch) -> None:
         "latest agent frameworks",
         Configuration(search_api=SearchAPI.DUCKDUCKGO),
         loop_count=0,
+        recorder=recorder,
     )
 
     assert payload == fallback_payload
     assert notices == ["已自动切换到多引擎搜索。"]
     assert answer is None
     assert backend == "ddgs-auto"
+    metrics = recorder.snapshot()
+    assert metrics["search_attempts"] == 1
+    assert metrics["search_failures"] == 1
+    assert metrics["fallback_triggers"] == 1
+    assert metrics["fallback_successes"] == 1
 
 
 def test_empty_duckduckgo_payload_uses_multi_engine_fallback(monkeypatch) -> None:
+    recorder = RunRecorder(run_id="search_empty", topic="test")
     monkeypatch.setattr(
         search._GLOBAL_SEARCH_TOOL,
         "run",
@@ -69,8 +79,15 @@ def test_empty_duckduckgo_payload_uses_multi_engine_fallback(monkeypatch) -> Non
         "framework landscape",
         Configuration(search_api=SearchAPI.DUCKDUCKGO),
         loop_count=0,
+        recorder=recorder,
     )
 
     assert payload is not None
     assert payload["results"]
     assert backend == "ddgs-auto"
+    metrics = recorder.snapshot()
+    assert metrics["search_attempts"] == 1
+    assert metrics["search_failures"] == 1
+    assert metrics["search_empty_results"] == 1
+    assert metrics["fallback_triggers"] == 1
+    assert metrics["fallback_successes"] == 1
