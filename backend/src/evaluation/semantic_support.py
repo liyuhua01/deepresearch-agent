@@ -157,6 +157,99 @@ def score_review_items(
     }
 
 
+def merge_independent_reviews(
+    review_sets: Iterable[Iterable[SupportReviewItem]],
+    *,
+    require_complete: bool = True,
+) -> list[SupportReviewItem]:
+    """Merge independently annotated copies after strict identity checks."""
+    datasets = [list(items) for items in review_sets]
+    if len(datasets) < 2:
+        raise ValueError("at least two independent review files are required")
+    if not datasets[0]:
+        raise ValueError("semantic-support review set must not be empty")
+
+    authority = {item.item_id: item for item in datasets[0]}
+    if len(authority) != len(datasets[0]):
+        raise ValueError("duplicate support item ids in review authority")
+
+    reviewer_files: dict[str, int] = {}
+    merged_annotations: dict[str, dict[str, dict[str, str]]] = {
+        item_id: {} for item_id in authority
+    }
+    for file_index, dataset in enumerate(datasets, start=1):
+        indexed = {item.item_id: item for item in dataset}
+        if len(indexed) != len(dataset) or set(indexed) != set(authority):
+            raise ValueError(
+                f"review file {file_index} does not match the authority item ids"
+            )
+
+        file_reviewers: set[str] = set()
+        for item_id, expected in authority.items():
+            observed = indexed[item_id]
+            if (
+                observed.run_id != expected.run_id
+                or observed.question_id != expected.question_id
+                or observed.claim != expected.claim
+                or observed.citation_urls != expected.citation_urls
+            ):
+                raise ValueError(
+                    f"review file {file_index} changed immutable item {item_id}"
+                )
+            if require_complete and len(observed.annotations) != 1:
+                raise ValueError(
+                    f"review file {file_index} must contain exactly one annotation "
+                    f"for {item_id}"
+                )
+            if len(observed.annotations) > 1:
+                raise ValueError(
+                    f"review file {file_index} contains multiple annotations for "
+                    f"{item_id}"
+                )
+            for annotation in observed.annotations:
+                reviewer = str(annotation["reviewer"])
+                file_reviewers.add(reviewer)
+                if reviewer in merged_annotations[item_id]:
+                    raise ValueError(
+                        f"reviewer {reviewer!r} appears more than once for {item_id}"
+                    )
+                merged_annotations[item_id][reviewer] = dict(annotation)
+
+        if not file_reviewers:
+            if require_complete:
+                raise ValueError(f"review file {file_index} has no reviewer")
+            continue
+        if len(file_reviewers) != 1:
+            raise ValueError(
+                f"review file {file_index} must belong to exactly one reviewer"
+            )
+        reviewer = next(iter(file_reviewers))
+        if reviewer in reviewer_files:
+            raise ValueError(
+                f"reviewer {reviewer!r} is reused in review files "
+                f"{reviewer_files[reviewer]} and {file_index}"
+            )
+        reviewer_files[reviewer] = file_index
+
+    if len(reviewer_files) < 2:
+        raise ValueError("at least two distinct reviewers are required")
+
+    return [
+        SupportReviewItem(
+            item_id=item.item_id,
+            run_id=item.run_id,
+            question_id=item.question_id,
+            claim=item.claim,
+            citation_urls=item.citation_urls,
+            annotations=tuple(
+                merged_annotations[item.item_id][reviewer]
+                for reviewer in sorted(merged_annotations[item.item_id])
+            ),
+        )
+        for item in datasets[0]
+    ]
+
+
 def sample_review_items(
     items: Iterable[SupportReviewItem],
     *,

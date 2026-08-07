@@ -16,6 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 from evaluation.semantic_support import (  # noqa: E402
     build_review_items,
     load_review_items,
+    merge_independent_reviews,
     sample_review_items,
     score_review_items,
     write_review_template,
@@ -48,6 +49,21 @@ def main() -> int:
     score.add_argument("--annotations", type=Path, required=True)
     score.add_argument("--output", type=Path)
     score.add_argument("--minimum-reviewers", type=int, default=2)
+
+    merge = subparsers.add_parser("merge")
+    merge.add_argument(
+        "--review",
+        action="append",
+        type=Path,
+        required=True,
+        help="One independently annotated review file; pass at least twice",
+    )
+    merge.add_argument("--output", type=Path, required=True)
+    merge.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="Allow missing per-item labels while retaining identity checks",
+    )
 
     args = parser.parse_args()
     if args.command == "export":
@@ -84,6 +100,33 @@ def main() -> int:
         write_review_template(args.output, items)
         sys.stdout.write(
             json.dumps({"output": str(args.output), "items": len(items)}) + "\n"
+        )
+        return 0
+
+    if args.command == "merge":
+        if len(args.review) < 2:
+            raise SystemExit("merge requires at least two --review files")
+        merged = merge_independent_reviews(
+            (load_review_items(path) for path in args.review),
+            require_complete=not args.allow_incomplete,
+        )
+        write_review_template(args.output, merged)
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "output": str(args.output),
+                    "items": len(merged),
+                    "reviewers": sorted(
+                        {
+                            annotation["reviewer"]
+                            for item in merged
+                            for annotation in item.annotations
+                        }
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
         )
         return 0
 

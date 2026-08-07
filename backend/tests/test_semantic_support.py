@@ -10,6 +10,7 @@ from evaluation.semantic_support import (
     SupportReviewItem,
     build_review_items,
     load_review_items,
+    merge_independent_reviews,
     sample_review_items,
     score_review_items,
     write_review_template,
@@ -136,3 +137,59 @@ def test_sampling_is_deterministic_and_spans_questions() -> None:
 
     assert first == second
     assert {item.question_id for item in first} == {"Q01", "Q02", "Q03"}
+
+
+def _review_copy(
+    reviewer: str,
+    label: str,
+    *,
+    claim: str = "claim",
+) -> list[SupportReviewItem]:
+    return [
+        SupportReviewItem(
+            item_id="one",
+            run_id="run-1",
+            question_id="Q01",
+            claim=claim,
+            citation_urls=("https://example.com/",),
+            annotations=({"reviewer": reviewer, "label": label},),
+        )
+    ]
+
+
+def test_merge_independent_reviews_preserves_distinct_labels() -> None:
+    merged = merge_independent_reviews(
+        [
+            _review_copy("reviewer-a", "fully_supported"),
+            _review_copy("reviewer-b", "partially_supported"),
+        ]
+    )
+
+    assert merged[0].annotations == (
+        {"reviewer": "reviewer-a", "label": "fully_supported"},
+        {"reviewer": "reviewer-b", "label": "partially_supported"},
+    )
+
+
+def test_merge_rejects_changed_claims() -> None:
+    with pytest.raises(ValueError, match="changed immutable item"):
+        merge_independent_reviews(
+            [
+                _review_copy("reviewer-a", "fully_supported"),
+                _review_copy(
+                    "reviewer-b",
+                    "fully_supported",
+                    claim="silently changed claim",
+                ),
+            ]
+        )
+
+
+def test_merge_rejects_reused_reviewer_identity() -> None:
+    with pytest.raises(ValueError, match="appears more than once"):
+        merge_independent_reviews(
+            [
+                _review_copy("same-reviewer", "fully_supported"),
+                _review_copy("same-reviewer", "unsupported"),
+            ]
+        )

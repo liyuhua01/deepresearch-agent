@@ -60,11 +60,20 @@ uv run python scripts/run_support_audit.py export-benchmark \
   --sample-size 40
 ```
 
-每条结论至少由两名复核者标注 `fully_supported`、`partially_supported`、`unsupported`、`inaccessible` 或 `insufficient_context`，再执行：
+将导出文件复制为两份，每名复核者只能查看并编辑自己的副本，为每条结论添加唯一的 `annotations` 标签：`fully_supported`、`partially_supported`、`unsupported`、`inaccessible` 或 `insufficient_context`。两人完成前不得交换标签。然后严格合并两个独立文件：
+
+```bash
+uv run python scripts/run_support_audit.py merge \
+  --review reviewer-a.json \
+  --review reviewer-b.json \
+  --output semantic-support-merged.json
+```
+
+合并器会拒绝被修改的结论、URL、题号、重复复核者身份以及缺失标签。最后执行：
 
 ```bash
 uv run python scripts/run_support_audit.py score \
-  --annotations benchmarks/results/<benchmark-id>/semantic-support-review.json \
+  --annotations semantic-support-merged.json \
   --output benchmarks/results/<benchmark-id>/semantic-support-summary.json
 ```
 
