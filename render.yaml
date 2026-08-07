@@ -43,8 +43,8 @@ services:
       - key: APP_ACCESS_PASSWORD
         sync: false
       - key: RATE_LIMIT_REQUESTS
-        value: "5"
+        value: "30"
       - key: RATE_LIMIT_WINDOW_SECONDS
         value: "3600"
       - key: DAILY_RESEARCH_BUDGET
-        value: "20"
+        value: "30"
