@@ -30,14 +30,14 @@
 
 | 日期 | 代码版本 | 题号 | 模型 | 搜索源 | 耗时(s) | 子任务 | 引用数 | 可访问率 | 成功 | 失败阶段/备注 |
 |---|---|---:|---|---|---:|---:|---:|---:|---|---|
-| 待运行 | local-uncommitted | 1 | 待配置 | duckduckgo | — | — | — | — | — | 等待云端模型密钥 |
-| 待运行 | local-uncommitted | 2 | 待配置 | duckduckgo | — | — | — | — | — | 等待云端模型密钥 |
-| 待运行 | local-uncommitted | 3 | 待配置 | duckduckgo | — | — | — | — | — | 等待云端模型密钥 |
-| 待运行 | local-uncommitted | 4 | 待配置 | duckduckgo | — | — | — | — | — | 等待云端模型密钥 |
-| 待运行 | local-uncommitted | 5 | 待配置 | duckduckgo | — | — | — | — | — | 等待云端模型密钥 |
-| 待运行 | local-uncommitted | 6 | 待配置 | duckduckgo | — | — | — | — | — | 等待云端模型密钥 |
-| 待运行 | local-uncommitted | 7 | 待配置 | duckduckgo | — | — | — | — | — | 等待云端模型密钥 |
-| 待运行 | local-uncommitted | 8 | 待配置 | duckduckgo | — | — | — | — | — | 等待云端模型密钥 |
+| 2026-08-07 | 346f78b | 1 | deepseek-v4-flash | duckduckgo | 130.68 | 1 | 5 | 100% | 是 | 覆盖率 68.42% |
+| 2026-08-07 | 346f78b | 2 | deepseek-v4-flash | duckduckgo | 103.28 | 1 | 5 | 80% | 是 | 覆盖率 61.11% |
+| 2026-08-07 | 346f78b | 3 | deepseek-v4-flash | duckduckgo | 273.60 | 5 | 22 | 90.91% | 是 | 覆盖率 0% |
+| 2026-08-07 | 346f78b | 4 | deepseek-v4-flash | duckduckgo | 171.64 | 1 | 5 | 80% | 是 | 覆盖率 81.82% |
+| 2026-08-07 | 346f78b | 5 | deepseek-v4-flash | duckduckgo | 164.81 | 1 | 4 | 50% | 是 | 覆盖率 31.58% |
+| 2026-08-07 | 346f78b | 6 | deepseek-v4-flash | duckduckgo | 295.20 | 5 | 20 | 80% | 是 | 覆盖率 89.29% |
+| 2026-08-07 | 346f78b | 7 | deepseek-v4-flash | duckduckgo | 154.60 | 1 | 3 | 100% | 是 | 覆盖率 10.53% |
+| 2026-08-07 | 346f78b | 8 | deepseek-v4-flash | duckduckgo | 188.75 | 1 | 5 | 100% | 是 | 覆盖率 8.33% |
 
 ## 最小验收线
 

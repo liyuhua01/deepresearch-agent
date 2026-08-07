@@ -33,6 +33,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-web-research-loops", type=int, default=3)
     parser.add_argument("--limit", type=int, help="Run only the first N questions")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--rerun-failed",
+        action="store_true",
+        help="With --resume, rerun only non-completed terminal artifacts",
+    )
     parser.add_argument("--disable-provenance", action="store_true")
     parser.add_argument("--skip-accessibility", action="store_true")
     return parser.parse_args()
@@ -48,6 +53,8 @@ def main() -> int:
         questions = questions[: args.limit]
     if args.resume and args.output_dir is None:
         raise SystemExit("--resume requires --output-dir")
+    if args.rerun_failed and not args.resume:
+        raise SystemExit("--rerun-failed requires --resume")
     output_dir = args.output_dir or (
         BACKEND_ROOT
         / "benchmarks"
@@ -65,6 +72,7 @@ def main() -> int:
         model=args.model,
         repetitions=args.repetitions,
         resume=args.resume,
+        rerun_failed=args.rerun_failed,
         max_web_research_loops=args.max_web_research_loops,
     )
     try:

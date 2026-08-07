@@ -84,6 +84,7 @@ class BenchmarkRunner:
         model: str | None = None,
         repetitions: int = 1,
         resume: bool = False,
+        rerun_failed: bool = False,
         max_web_research_loops: int = 3,
     ) -> None:
         """Configure one serial benchmark execution session."""
@@ -98,6 +99,7 @@ class BenchmarkRunner:
         self.model = model
         self.repetitions = max(1, repetitions)
         self.resume = resume
+        self.rerun_failed = rerun_failed
         self.max_web_research_loops = max(1, max_web_research_loops)
         self._owns_client = client is None
         self.client = client or httpx.Client(
@@ -125,7 +127,9 @@ class BenchmarkRunner:
                 run_key = f"{question.id}-run-{repetition:02d}"
                 run_path = self.runs_dir / f"{run_key}.json"
                 if self.resume and _is_terminal_run(run_path):
-                    continue
+                    existing = json.loads(run_path.read_text(encoding="utf-8"))
+                    if not self.rerun_failed or existing.get("status") == "completed":
+                        continue
                 run_id = manifest["run_ids"].setdefault(
                     run_key,
                     _new_run_id(manifest["benchmark_id"], question.id, repetition),
@@ -314,8 +318,11 @@ class BenchmarkRunner:
             return {"accessible_count": None, "accessibility_rate": None, "results": []}
 
     def _prepare_directories(self) -> None:
-        self.runs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.reports_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.runs_dir.mkdir(exist_ok=True, mode=0o700)
+        self.reports_dir.mkdir(exist_ok=True, mode=0o700)
+        for directory in (self.output_dir, self.runs_dir, self.reports_dir):
+            os.chmod(directory, 0o700)
 
     def _load_or_create_manifest(
         self, questions: list[BenchmarkQuestion]
@@ -383,6 +390,10 @@ def build_summary(runs: list[dict[str, Any]], manifest: dict[str, Any]) -> dict[
     coverages = [item for item in coverages if item is not None]
     access_rates = [_number(item.get("citation_accessibility_rate")) for item in completed]
     access_rates = [item for item in access_rates if item is not None]
+    accessible_total = _nullable_sum_field(completed, "citation_accessible_count")
+    citation_unique_total = _sum_field(completed, "citation_count_unique")
+    claim_units_total = _sum_field(completed, "claim_units")
+    cited_claim_units_total = _sum_field(completed, "claim_units_with_citations")
 
     search_attempts = _sum_field(runs, "search_attempts")
     search_failures = _sum_field(runs, "search_failures")
@@ -417,11 +428,24 @@ def build_summary(runs: list[dict[str, Any]], manifest: dict[str, Any]) -> dict[
             "p95": _percentile(durations, 0.95),
         },
         "llm_calls_mean": _mean_field(completed, "llm_calls"),
+        "llm_calls_total": _nullable_sum_field(completed, "llm_calls"),
         "tokens_mean": _mean_field(completed, "total_tokens"),
+        "tokens_total": _nullable_sum_field(completed, "total_tokens"),
         "estimated_cost_mean": _mean_field(completed, "estimated_cost"),
+        "estimated_cost_total": _nullable_sum_field(completed, "estimated_cost"),
         "citation_unique_mean": _mean_field(completed, "citation_count_unique"),
+        "citation_unique_total": citation_unique_total,
+        "citation_accessible_total": accessible_total,
         "claim_citation_coverage_mean": _mean(coverages),
+        "claim_citation_coverage_weighted": _rate(
+            cited_claim_units_total, claim_units_total
+        ),
+        "claim_units_total": claim_units_total,
+        "claim_units_with_citations_total": cited_claim_units_total,
         "citation_accessibility_rate_mean": _mean(access_rates),
+        "citation_accessibility_rate_weighted": _rate(
+            accessible_total, citation_unique_total
+        ) if accessible_total is not None else None,
         "search_failure_rate": _rate(search_failures, search_attempts),
         "fallback_recovery_rate": _rate(fallback_successes, fallback_triggers),
         "failure_stage_counts": dict(sorted(failure_stages.items())),
@@ -606,6 +630,11 @@ def _number(value: Any) -> float | None:
 
 def _sum_field(items: list[dict[str, Any]], field: str) -> float:
     return sum(value for item in items if (value := _number(item.get(field))) is not None)
+
+
+def _nullable_sum_field(items: list[dict[str, Any]], field: str) -> float | None:
+    values = [value for item in items if (value := _number(item.get(field))) is not None]
+    return sum(values) if values else None
 
 
 def _mean_field(items: list[dict[str, Any]], field: str) -> float | None:
