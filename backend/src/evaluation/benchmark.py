@@ -8,6 +8,7 @@ import json
 import math
 import os
 import subprocess
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,6 +117,60 @@ class BenchmarkRunner:
         if self._owns_client:
             self.client.close()
 
+    def preflight_capacity(self, required_runs: int) -> dict[str, Any]:
+        """Verify readiness and budget before starting a paid benchmark batch."""
+        if required_runs <= 0:
+            raise ValueError("required_runs must be positive")
+        try:
+            response = self.client.get(f"{self.base_url}/readyz", timeout=20)
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"benchmark preflight could not reach /readyz: {type(exc).__name__}"
+            ) from exc
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"benchmark preflight failed: /readyz returned HTTP "
+                f"{response.status_code}"
+            )
+        try:
+            payload = response.json()
+            budget = payload["budget"]
+            remaining = int(budget["remaining"])
+            raw_rate_limit = budget.get("rate_limit_requests")
+            rate_limit = int(raw_rate_limit) if raw_rate_limit is not None else None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "benchmark preflight failed: /readyz returned malformed budget data"
+            ) from exc
+        if payload.get("status") != "ready":
+            raise RuntimeError("benchmark preflight failed: deployment is not ready")
+        if remaining < required_runs:
+            raise RuntimeError(
+                "benchmark preflight failed: "
+                f"requires {required_runs} runs but only {remaining} budget remains"
+            )
+        if rate_limit is not None and rate_limit < required_runs:
+            window = budget.get("rate_limit_window_seconds", "configured")
+            raise RuntimeError(
+                "benchmark preflight failed: "
+                f"requires {required_runs} uninterrupted runs but the per-client "
+                f"limit is {rate_limit} per {window} seconds"
+            )
+        return payload
+
+    def pending_run_count(self, questions: Iterable[BenchmarkQuestion]) -> int:
+        """Count requests still needed, respecting resume and rerun policy."""
+        pending = 0
+        for question in questions:
+            for repetition in range(1, self.repetitions + 1):
+                run_path = self.runs_dir / f"{question.id}-run-{repetition:02d}.json"
+                if self.resume and _is_terminal_run(run_path):
+                    existing = json.loads(run_path.read_text(encoding="utf-8"))
+                    if not self.rerun_failed or existing.get("status") == "completed":
+                        continue
+                pending += 1
+        return pending
+
     def run(self, questions: Iterable[BenchmarkQuestion]) -> dict[str, Any]:
         """Run all requested questions and always rebuild aggregate outputs."""
         selected = list(questions)
@@ -184,6 +239,7 @@ class BenchmarkRunner:
                     "topic": question.topic,
                     "search_api": self.search_api,
                     "enable_source_provenance": self.enable_source_provenance,
+                    "max_web_research_loops": self.max_web_research_loops,
                     "job_id": run_id,
                 },
                 timeout=httpx.Timeout(
@@ -418,6 +474,14 @@ def build_summary(
     successful = [item for item in runs if item.get("benchmark_success") is True]
     durations = [_number(item.get("total_duration_ms")) for item in completed]
     durations = [item for item in durations if item is not None]
+    repetitions_by_question = Counter(
+        str(item.get("question_id")) for item in completed if item.get("question_id")
+    )
+    latency_repeatable = bool(
+        len(durations) >= 24
+        and len(repetitions_by_question) == 8
+        and min(repetitions_by_question.values(), default=0) >= 3
+    )
     coverages = [_number(item.get("claim_citation_coverage")) for item in completed]
     coverages = [item for item in coverages if item is not None]
     access_rates = [
@@ -468,6 +532,13 @@ def build_summary(
             "p50": _percentile(durations, 0.50),
             "p95": _percentile(durations, 0.95),
         },
+        "latency_sample_count": len(durations),
+        "latency_repetitions_by_question": dict(
+            sorted(repetitions_by_question.items())
+        ),
+        "latency_percentiles_status": (
+            "repeatable_baseline" if latency_repeatable else "provisional"
+        ),
         "llm_calls_mean": _mean_field(completed, "llm_calls"),
         "llm_calls_total": _nullable_sum_field(completed, "llm_calls"),
         "tokens_mean": _mean_field(completed, "total_tokens"),

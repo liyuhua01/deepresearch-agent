@@ -54,7 +54,8 @@ class RuntimeSettings:
     model_pricing_file: Path | None
 
     @classmethod
-    def from_env(cls) -> "RuntimeSettings":
+    def from_env(cls) -> RuntimeSettings:
+        """Load public-demo safeguards from environment variables."""
         project_root = Path(__file__).resolve().parents[2]
         frontend_dir = Path(
             os.getenv("FRONTEND_DIST_DIR", str(project_root / "frontend" / "dist"))
@@ -98,6 +99,7 @@ class ResearchLimitExceeded(RuntimeError):
     """Raised when a client or the whole demo exceeds a configured limit."""
 
     def __init__(self, message: str, *, retry_after: int) -> None:
+        """Store the user-safe error and suggested retry delay."""
         super().__init__(message)
         self.retry_after = retry_after
 
@@ -106,6 +108,7 @@ class ResearchGate:
     """Single-process request limiter and daily research budget guard."""
 
     def __init__(self, settings: RuntimeSettings) -> None:
+        """Initialize an in-memory limiter for one application process."""
         self._settings = settings
         self._requests: dict[str, deque[float]] = defaultdict(deque)
         self._budget_date = date.today()
@@ -113,6 +116,7 @@ class ResearchGate:
         self._lock = Lock()
 
     def consume(self, client_id: str) -> None:
+        """Consume one request or raise when a configured limit is reached."""
         now = time()
         with self._lock:
             today = date.today()
@@ -142,18 +146,20 @@ class ResearchGate:
             self._daily_count += 1
 
     def snapshot(self) -> dict[str, int | str]:
+        """Return non-sensitive budget and rate-limit capacity details."""
         with self._lock:
             return {
                 "date": self._budget_date.isoformat(),
                 "used": self._daily_count,
                 "limit": self._settings.daily_research_budget,
                 "remaining": max(0, self._settings.daily_research_budget - self._daily_count),
+                "rate_limit_requests": self._settings.rate_limit_requests,
+                "rate_limit_window_seconds": self._settings.rate_limit_window_seconds,
             }
 
 
 def research_configuration_errors(config: Configuration) -> list[str]:
     """Return actionable configuration errors without exposing secret values."""
-
     errors: list[str] = []
     provider = (config.llm_provider or "").strip().lower()
 

@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
+import socket
+
+import pytest
+
 from config import Configuration, SearchAPI
 from evaluation.telemetry import RunRecorder
 from services import search
 
 
-def test_duckduckgo_failure_uses_multi_engine_fallback(monkeypatch) -> None:
-    recorder = RunRecorder(run_id="search_failure", topic="test")
-
-    def fail_direct_search(_parameters):
-        raise RuntimeError("DuckDuckGo 搜索失败: No results found.")
-
-    fallback_payload = {
+def test_duckduckgo_uses_ddgs_as_primary_without_false_failure(monkeypatch) -> None:
+    recorder = RunRecorder(run_id="search_primary", topic="test")
+    primary_payload = {
         "results": [
             {
-                "title": "Fallback result",
+                "title": "Primary result",
                 "url": "https://example.com/source",
                 "content": "Evidence",
                 "raw_content": "Evidence",
@@ -24,52 +24,180 @@ def test_duckduckgo_failure_uses_multi_engine_fallback(monkeypatch) -> None:
         ],
         "backend": "ddgs-auto",
         "answer": None,
-        "notices": ["已自动切换到多引擎搜索。"],
+        "notices": [],
     }
-
-    monkeypatch.setattr(search._GLOBAL_SEARCH_TOOL, "run", fail_direct_search)
     monkeypatch.setattr(
         search,
-        "_ddgs_auto_fallback",
-        lambda _query, *, max_results: fallback_payload,
+        "_ddgs_multi_engine_search",
+        lambda _query, *, max_results: primary_payload,
     )
 
     payload, notices, answer, backend = search.dispatch_search(
         "latest agent frameworks",
-        Configuration(search_api=SearchAPI.DUCKDUCKGO),
+        Configuration(
+            search_api=SearchAPI.DUCKDUCKGO,
+            fetch_full_page=False,
+        ),
         loop_count=0,
         recorder=recorder,
     )
 
-    assert payload == fallback_payload
-    assert notices == ["已自动切换到多引擎搜索。"]
+    assert payload == primary_payload
+    assert notices == []
     assert answer is None
     assert backend == "ddgs-auto"
     metrics = recorder.snapshot()
     assert metrics["search_attempts"] == 1
-    assert metrics["search_failures"] == 1
-    assert metrics["fallback_triggers"] == 1
-    assert metrics["fallback_successes"] == 1
+    assert metrics["search_successes"] == 1
+    assert metrics["search_failures"] == 0
+    assert metrics["fallback_triggers"] == 0
+    assert metrics["fallback_successes"] == 0
 
 
-def test_empty_duckduckgo_payload_uses_multi_engine_fallback(monkeypatch) -> None:
-    recorder = RunRecorder(run_id="search_empty", topic="test")
+def test_duckduckgo_enriches_full_page_evidence_without_mutating_primary(
+    monkeypatch,
+) -> None:
+    primary_payload = {
+        "results": [
+            {
+                "title": "Primary result",
+                "url": "https://example.com/source",
+                "content": "Search snippet",
+                "raw_content": "Search snippet",
+            }
+        ],
+        "backend": "ddgs-auto",
+        "answer": None,
+        "notices": [],
+    }
     monkeypatch.setattr(
-        search._GLOBAL_SEARCH_TOOL,
-        "run",
-        lambda _parameters: {
-            "results": [],
-            "backend": "duckduckgo",
+        search,
+        "_ddgs_multi_engine_search",
+        lambda _query, *, max_results: primary_payload,
+    )
+    monkeypatch.setattr(
+        search,
+        "_fetch_public_page_text",
+        lambda _url, *, max_chars: "Bounded full-page evidence",
+    )
+
+    payload, notices, _, _ = search.dispatch_search(
+        "latest agent frameworks",
+        Configuration(
+            search_api=SearchAPI.DUCKDUCKGO,
+            fetch_full_page=True,
+        ),
+        loop_count=0,
+    )
+
+    assert payload is not None
+    assert payload["results"][0]["raw_content"] == "Bounded full-page evidence"
+    assert primary_payload["results"][0]["raw_content"] == "Search snippet"
+    assert primary_payload["notices"] == []
+    assert notices == ["DDGS 主搜索已取得 1/1 个受限全文证据。"]
+
+
+def test_duckduckgo_skips_full_page_fetch_when_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        search,
+        "_ddgs_multi_engine_search",
+        lambda _query, *, max_results: {
+            "results": [
+                {
+                    "title": "Primary result",
+                    "url": "https://example.com/source",
+                    "content": "Search snippet",
+                    "raw_content": "Search snippet",
+                }
+            ],
+            "backend": "ddgs-auto",
             "answer": None,
             "notices": [],
         },
     )
     monkeypatch.setattr(
         search,
-        "_ddgs_auto_fallback",
+        "_enrich_ddgs_full_pages",
+        lambda *_args, **_kwargs: pytest.fail("full-page fetch should be disabled"),
+    )
+
+    payload, _, _, _ = search.dispatch_search(
+        "latest agent frameworks",
+        Configuration(
+            search_api=SearchAPI.DUCKDUCKGO,
+            fetch_full_page=False,
+        ),
+        loop_count=0,
+    )
+
+    assert payload is not None
+    assert payload["results"][0]["raw_content"] == "Search snippet"
+
+
+def test_reject_non_public_evidence_hosts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.4", 0))],
+    )
+
+    with pytest.raises(ValueError, match="non-public"):
+        search._reject_non_public_host("internal.example")
+
+
+def test_empty_ddgs_and_failed_legacy_fallback_records_failure(monkeypatch) -> None:
+    recorder = RunRecorder(run_id="search_fallback_failed", topic="test")
+    monkeypatch.setattr(
+        search,
+        "_ddgs_multi_engine_search",
         lambda _query, *, max_results: {
-            "results": [{"title": "Recovered", "url": "https://example.com"}],
+            "results": [],
             "backend": "ddgs-auto",
+            "answer": None,
+            "notices": [],
+        },
+    )
+    monkeypatch.setattr(
+        search._GLOBAL_SEARCH_TOOL,
+        "run",
+        lambda _parameters: (_ for _ in ()).throw(RuntimeError("legacy failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="legacy failed"):
+        search.dispatch_search(
+            "framework landscape",
+            Configuration(search_api=SearchAPI.DUCKDUCKGO),
+            loop_count=0,
+            recorder=recorder,
+        )
+
+    metrics = recorder.snapshot()
+    assert metrics["search_attempts"] == 1
+    assert metrics["search_failures"] == 1
+    assert metrics["search_empty_results"] == 1
+    assert metrics["fallback_triggers"] == 1
+    assert metrics["fallback_successes"] == 0
+    assert metrics["fallback_triggers"] - metrics["fallback_successes"] == 1
+
+
+def test_empty_ddgs_primary_uses_legacy_adapter_fallback(monkeypatch) -> None:
+    recorder = RunRecorder(run_id="search_empty", topic="test")
+    monkeypatch.setattr(
+        search,
+        "_ddgs_multi_engine_search",
+        lambda _query, *, max_results: {
+            "results": [],
+            "backend": "ddgs-auto",
+            "answer": None,
+            "notices": [],
+        },
+    )
+    monkeypatch.setattr(
+        search._GLOBAL_SEARCH_TOOL,
+        "run",
+        lambda _parameters: {
+            "results": [{"title": "Recovered", "url": "https://example.com"}],
+            "backend": "duckduckgo-legacy",
             "answer": None,
             "notices": [],
         },
@@ -84,7 +212,7 @@ def test_empty_duckduckgo_payload_uses_multi_engine_fallback(monkeypatch) -> Non
 
     assert payload is not None
     assert payload["results"]
-    assert backend == "ddgs-auto"
+    assert backend == "duckduckgo-legacy"
     metrics = recorder.snapshot()
     assert metrics["search_attempts"] == 1
     assert metrics["search_failures"] == 1
@@ -95,40 +223,43 @@ def test_empty_duckduckgo_payload_uses_multi_engine_fallback(monkeypatch) -> Non
 
 def test_provenance_search_adds_and_prioritizes_official_sources(monkeypatch) -> None:
     recorder = RunRecorder(run_id="quality_search", topic="asyncio")
-    responses = iter(
-        [
-            {
-                "results": [
-                    {
-                        "title": "Asyncio community comparison",
-                        "url": "https://example.com/asyncio-comparison",
-                        "content": "community evidence",
-                    },
-                    {
-                        "title": "Unrelated package manager",
-                        "url": "https://example.org/uv-guide",
-                        "content": "unrelated",
-                    },
-                ],
-                "backend": "duckduckgo",
-                "answer": None,
-                "notices": [],
-            },
-            {
-                "results": [
-                    {
-                        "title": "asyncio — Asynchronous I/O",
-                        "url": "https://docs.python.org/3/library/asyncio.html",
-                        "content": "official evidence",
-                    }
-                ],
-                "backend": "duckduckgo",
-                "answer": None,
-                "notices": [],
-            },
-        ]
+    monkeypatch.setattr(
+        search,
+        "_ddgs_multi_engine_search",
+        lambda _query, *, max_results: {
+            "results": [
+                {
+                    "title": "Asyncio community comparison",
+                    "url": "https://example.com/asyncio-comparison",
+                    "content": "community evidence",
+                },
+                {
+                    "title": "Unrelated package manager",
+                    "url": "https://example.org/uv-guide",
+                    "content": "unrelated",
+                },
+            ],
+            "backend": "ddgs-auto",
+            "answer": None,
+            "notices": [],
+        },
     )
-    monkeypatch.setattr(search._GLOBAL_SEARCH_TOOL, "run", lambda _params: next(responses))
+    monkeypatch.setattr(
+        search._GLOBAL_SEARCH_TOOL,
+        "run",
+        lambda _params: {
+            "results": [
+                {
+                    "title": "asyncio — Asynchronous I/O",
+                    "url": "https://docs.python.org/3/library/asyncio.html",
+                    "content": "official evidence",
+                }
+            ],
+            "backend": "duckduckgo",
+            "answer": None,
+            "notices": [],
+        },
+    )
 
     payload, notices, _, _ = search.dispatch_search(
         "Python asyncio high concurrency",
@@ -153,14 +284,10 @@ def test_provenance_search_adds_and_prioritizes_official_sources(monkeypatch) ->
 
 
 def test_provenance_supplement_failure_keeps_primary_results(monkeypatch) -> None:
-    calls = 0
-
-    def run_search(_params):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("supplement unavailable")
-        return {
+    monkeypatch.setattr(
+        search,
+        "_ddgs_multi_engine_search",
+        lambda _query, *, max_results: {
             "results": [
                 {
                     "title": "Primary asyncio result",
@@ -171,15 +298,12 @@ def test_provenance_supplement_failure_keeps_primary_results(monkeypatch) -> Non
             "backend": "duckduckgo",
             "answer": None,
             "notices": [],
-        }
-
-    monkeypatch.setattr(search._GLOBAL_SEARCH_TOOL, "run", run_search)
+        },
+    )
     monkeypatch.setattr(
-        search,
-        "_ddgs_auto_fallback",
-        lambda _query, max_results: (_ for _ in ()).throw(
-            RuntimeError("fallback unavailable")
-        ),
+        search._GLOBAL_SEARCH_TOOL,
+        "run",
+        lambda _params: (_ for _ in ()).throw(RuntimeError("supplement unavailable")),
     )
 
     payload, notices, _, _ = search.dispatch_search(
@@ -208,32 +332,38 @@ def test_authoritative_query_uses_known_official_technical_domain() -> None:
 
 
 def test_provenance_retries_when_provider_ignores_official_domain(monkeypatch) -> None:
-    responses = iter(
+    ddgs_responses = iter(
         [
             {
-                "results": [{"title": "asyncio article", "url": "https://example.com/asyncio"}],
+                "results": [
+                    {"title": "asyncio article", "url": "https://example.com/asyncio"}
+                ],
                 "backend": "duckduckgo",
                 "notices": [],
             },
             {
-                "results": [{"title": "Greek Peak", "url": "https://www.greekpeak.net/"}],
-                "backend": "duckduckgo",
-                "notices": [],
+                "results": [
+                    {
+                        "title": "asyncio — Asynchronous I/O",
+                        "url": "https://docs.python.org/3/library/asyncio.html",
+                        "content": "official evidence",
+                    }
+                ]
             },
         ]
     )
-    monkeypatch.setattr(search._GLOBAL_SEARCH_TOOL, "run", lambda _params: next(responses))
     monkeypatch.setattr(
         search,
-        "_ddgs_auto_fallback",
-        lambda _query, max_results: {
-            "results": [
-                {
-                    "title": "asyncio — Asynchronous I/O",
-                    "url": "https://docs.python.org/3/library/asyncio.html",
-                    "content": "official evidence",
-                }
-            ]
+        "_ddgs_multi_engine_search",
+        lambda _query, max_results: next(ddgs_responses),
+    )
+    monkeypatch.setattr(
+        search._GLOBAL_SEARCH_TOOL,
+        "run",
+        lambda _params: {
+            "results": [{"title": "Greek Peak", "url": "https://www.greekpeak.net/"}],
+            "backend": "duckduckgo",
+            "notices": [],
         },
     )
 

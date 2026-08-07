@@ -20,7 +20,9 @@ def _settings(**overrides: object) -> RuntimeSettings:
     return replace(base, **overrides)
 
 
-def test_custom_provider_reports_missing_required_values(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_custom_provider_reports_missing_required_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     config = Configuration(
         llm_provider="custom",
@@ -66,7 +68,25 @@ def test_gate_enforces_daily_budget_across_clients() -> None:
         gate.consume("client-b")
 
 
-def test_run_telemetry_feature_flag_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gate_snapshot_exposes_capacity_without_client_history() -> None:
+    gate = ResearchGate(
+        _settings(
+            rate_limit_requests=7,
+            rate_limit_window_seconds=1800,
+            daily_research_budget=30,
+        )
+    )
+
+    snapshot = gate.snapshot()
+
+    assert snapshot["rate_limit_requests"] == 7
+    assert snapshot["rate_limit_window_seconds"] == 1800
+    assert "client" not in snapshot
+
+
+def test_run_telemetry_feature_flag_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("ENABLE_RUN_TELEMETRY", "false")
 
     settings = RuntimeSettings.from_env()

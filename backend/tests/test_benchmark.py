@@ -94,6 +94,7 @@ def test_fake_sse_runs_all_eight_and_continues_after_failure(tmp_path: Path) -> 
         assert "authorization" not in request.headers
         assert request.headers["x-evaluation-metrics"] == "1"
         payload = json.loads(request.content)
+        assert payload["max_web_research_loops"] == 3
         run_id = payload["job_id"]
         stream_calls.append(run_id)
         question_number = len(stream_calls)
@@ -137,6 +138,8 @@ def test_fake_sse_runs_all_eight_and_continues_after_failure(tmp_path: Path) -> 
     assert summary["benchmark_success_count"] == 7
     assert summary["failure_stage_counts"] == {"search": 1}
     assert summary["duration_ms"] == {"mean": 1200.0, "p50": 1200.0, "p95": 1200.0}
+    assert summary["latency_sample_count"] == 7
+    assert summary["latency_percentiles_status"] == "provisional"
     assert summary["search_failure_rate"] == 1 / 16
     assert summary["fallback_recovery_rate"] == 1.0
     assert summary["metrics_complete_count"] == 8
@@ -158,6 +161,116 @@ def test_fake_sse_runs_all_eight_and_continues_after_failure(tmp_path: Path) -> 
     assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
     assert stat.S_IMODE((tmp_path / "runs").stat().st_mode) == 0o700
     assert stat.S_IMODE((tmp_path / "summary.json").stat().st_mode) == 0o600
+
+
+def test_latency_percentiles_require_three_runs_for_each_question() -> None:
+    runs = [
+        {
+            "run_id": f"Q{question:02d}-{repetition}",
+            "question_id": f"Q{question:02d}",
+            "status": "completed",
+            "benchmark_success": True,
+            "total_duration_ms": 1000 + question,
+        }
+        for question in range(1, 9)
+        for repetition in range(1, 4)
+    ]
+
+    summary = build_summary(runs, {"benchmark_id": "stable"})
+
+    assert summary["latency_sample_count"] == 24
+    assert summary["latency_percentiles_status"] == "repeatable_baseline"
+    assert summary["latency_repetitions_by_question"]["Q01"] == 3
+
+
+def test_preflight_rejects_insufficient_remote_budget(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/readyz"
+        return httpx.Response(
+            200,
+            json={
+                "status": "ready",
+                "errors": [],
+                "budget": {"used": 0, "limit": 20, "remaining": 20},
+            },
+        )
+
+    runner = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(RuntimeError, match="requires 24 runs.*20 budget remains"):
+        runner.preflight_capacity(24)
+
+
+def test_preflight_returns_ready_payload_when_capacity_is_sufficient(
+    tmp_path: Path,
+) -> None:
+    expected = {
+        "status": "ready",
+        "errors": [],
+        "budget": {"used": 2, "limit": 30, "remaining": 28},
+    }
+    runner = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json=expected)
+            )
+        ),
+    )
+
+    assert runner.preflight_capacity(24) == expected
+
+
+def test_preflight_rejects_per_client_limit(tmp_path: Path) -> None:
+    payload = {
+        "status": "ready",
+        "errors": [],
+        "budget": {
+            "used": 0,
+            "limit": 30,
+            "remaining": 30,
+            "rate_limit_requests": 5,
+            "rate_limit_window_seconds": 3600,
+        },
+    }
+    runner = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json=payload)
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="per-client limit is 5 per 3600 seconds"):
+        runner.preflight_capacity(24)
+
+
+def test_pending_count_only_includes_failed_resume_artifacts(tmp_path: Path) -> None:
+    _, questions = load_questions(QUESTIONS_PATH)
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    (runs_dir / "Q01-run-01.json").write_text(
+        json.dumps({"status": "completed"}), encoding="utf-8"
+    )
+    (runs_dir / "Q02-run-01.json").write_text(
+        json.dumps({"status": "failed"}), encoding="utf-8"
+    )
+    runner = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: None)),
+        resume=True,
+        rerun_failed=True,
+    )
+
+    assert runner.pending_run_count(questions[:2]) == 1
 
 
 class _TimeoutStream(httpx.SyncByteStream):

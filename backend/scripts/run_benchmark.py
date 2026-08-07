@@ -40,6 +40,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--disable-provenance", action="store_true")
     parser.add_argument("--skip-accessibility", action="store_true")
+    parser.add_argument(
+        "--skip-capacity-check",
+        action="store_true",
+        help="Skip the default /readyz budget preflight",
+    )
     return parser.parse_args()
 
 
@@ -76,6 +81,9 @@ def main() -> int:
         max_web_research_loops=args.max_web_research_loops,
     )
     try:
+        pending_runs = runner.pending_run_count(questions)
+        if not args.skip_capacity_check and pending_runs:
+            runner.preflight_capacity(pending_runs)
         summary = runner.run(questions)
     finally:
         runner.close()

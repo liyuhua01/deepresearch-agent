@@ -52,6 +52,24 @@ def test_request_can_override_provenance_for_controlled_ab_run(monkeypatch) -> N
     assert defaulted.enable_source_provenance is False
 
 
+def test_request_can_override_research_depth_for_benchmark(monkeypatch) -> None:
+    monkeypatch.setenv("MAX_WEB_RESEARCH_LOOPS", "3")
+
+    overridden = _build_config(
+        ResearchRequest(
+            topic="测试研究主题",
+            job_id="benchmark_depth_override",
+            max_web_research_loops=5,
+        )
+    )
+    defaulted = _build_config(
+        ResearchRequest(topic="测试研究主题", job_id="benchmark_depth_default")
+    )
+
+    assert overridden.max_web_research_loops == 5
+    assert defaulted.max_web_research_loops == 3
+
+
 def test_missing_model_configuration_returns_actionable_error(
     monkeypatch,
 ) -> None:

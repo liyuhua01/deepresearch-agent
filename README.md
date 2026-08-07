@@ -12,6 +12,7 @@
 - FastAPI（Python Web 接口框架）通过 SSE（服务器持续向浏览器推送事件）返回研究进度。
 - 支持 DuckDuckGo、Tavily、Perplexity、SearXNG 等检索来源。
 - DuckDuckGo 直连受限或无结果时，自动切换到 DDGS 多引擎公共搜索。
+- 当前 `duckduckgo` 配置直接使用实测更稳定的 DDGS 多引擎适配器作为主路径，旧 HelloAgents DuckDuckGo 适配器仅作有限备用。
 - 支持 Ollama、LM Studio 和 OpenAI-compatible API（兼容 OpenAI 请求格式的模型服务）。
 - 单个 Docker 容器同时承载前端和后端，浏览器只访问一个公开地址。
 - 启动配置检查、基础访问密码、按 IP 限流、每日研究次数上限。
@@ -137,6 +138,9 @@ npm run dev
 - 固定题目、指标定义和记录表：[`docs/DEMO_BENCHMARK.md`](./docs/DEMO_BENCHMARK.md)
 - 30～60 秒录屏脚本：[`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md)
 - 三个 P0 的统一评测数据链路、非回归契约与 Render 灰度部署方案：[`docs/P0_EVALUATION_CONTEXT_PACK.md`](./docs/P0_EVALUATION_CONTEXT_PACK.md)
+- 固定 8 题执行器支持多次重复、断点恢复和 JSON/CSV 汇总；少于每题 3 次、总计 24 次时，P50/P95 自动标记为 `provisional`（临时基线）。正式运行前会预检服务就绪状态、剩余日预算和单 IP 限流容量。
+- `backend/scripts/run_support_audit.py` 可从批量报告分层抽样并导出结论—引用双人复核模板，计算严格/宽松语义支持率及 95% 置信区间；未完成人工标注时不会生成虚假支持率。
+- DDGS 主搜索路径的固定 8 题 × 3 次搜索级回归见 [`docs/benchmarks/DDGS_PRIMARY_24_20260807.md`](./docs/benchmarks/DDGS_PRIMARY_24_20260807.md)。
 
 建议至少记录：总耗时、子任务数量、引用数量、可访问引用比例、是否成功、失败阶段。这样项目展示重点会从“我部署了一个教程项目”变成“我能对 Agent 系统做工程化、成本控制和质量评估”。
 

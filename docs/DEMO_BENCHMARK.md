@@ -45,3 +45,27 @@
 ## 最小验收线
 
 用于面试演示的候选配置，应在 8 题中至少 7 题成功；单题不超过 5 分钟；成功报告平均至少 5 个去重引用；抽查引用可访问率达到 80%。未达到时不要只换一个更贵的模型，应先按失败阶段区分搜索质量、网页抓取、上下文长度、输出解析和前端流式处理问题。
+
+延迟分位数只有在每题至少重复 3 次、总计至少 24 个完成样本时才标记为 `repeatable_baseline`（可重复基线）；不足时自动标记为 `provisional`，不得写成稳定生产指标。
+
+正式批量评测默认先请求 `/readyz` 做 capacity preflight（容量预检：在产生 LLM 费用前确认服务就绪且限额足够）。8 题 × 3 次至少需要 24 次剩余日额度，单 IP 限额也应至少为 24；不足时在首个研究请求前终止，避免产生不完整基线。断点续跑只按未完成样本计算所需容量。
+
+引用语义支持率采用独立人工复核，不用“结论附近存在 URL”代替。先导出复核集：
+
+```bash
+cd backend
+uv run python scripts/run_support_audit.py export-benchmark \
+  --results-dir benchmarks/results/<benchmark-id> \
+  --output benchmarks/results/<benchmark-id>/semantic-support-review.json \
+  --sample-size 40
+```
+
+每条结论至少由两名复核者标注 `fully_supported`、`partially_supported`、`unsupported`、`inaccessible` 或 `insufficient_context`，再执行：
+
+```bash
+uv run python scripts/run_support_audit.py score \
+  --annotations benchmarks/results/<benchmark-id>/semantic-support-review.json \
+  --output benchmarks/results/<benchmark-id>/semantic-support-summary.json
+```
+
+输出同时包含严格口径、宽松口径及各自的 95% Wilson confidence interval（Wilson 置信区间：用于表达样本比例的不确定范围）。未完成双人标注的项目不进入支持率分母。

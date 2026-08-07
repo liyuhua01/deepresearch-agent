@@ -69,6 +69,15 @@ class ResearchRequest(BaseModel):
             "when omitted, use the deployment default"
         ),
     )
+    max_web_research_loops: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description=(
+            "Optional per-run research-depth override for controlled evaluation; "
+            "when omitted, use the deployment default"
+        ),
+    )
     job_id: str = Field(
         default_factory=lambda: uuid4().hex,
         min_length=8,
@@ -100,14 +109,18 @@ def _build_config(payload: ResearchRequest) -> Configuration:
         overrides["search_api"] = payload.search_api
     if payload.enable_source_provenance is not None:
         overrides["enable_source_provenance"] = payload.enable_source_provenance
+    if payload.max_web_research_loops is not None:
+        overrides["max_web_research_loops"] = payload.max_web_research_loops
     return Configuration.from_env(overrides=overrides)
 
 
 def _new_recorder(payload: ResearchRequest) -> RunRecorder:
     """Create one recorder wired to the local terminal-artifact store."""
 
-    search_api = payload.search_api.value if payload.search_api else os.getenv(
-        "SEARCH_API", SearchAPI.DUCKDUCKGO.value
+    search_api = (
+        payload.search_api.value
+        if payload.search_api
+        else os.getenv("SEARCH_API", SearchAPI.DUCKDUCKGO.value)
     )
     return RunRecorder(
         run_id=payload.job_id,
@@ -157,7 +170,9 @@ def _validated_config(payload: ResearchRequest) -> Configuration:
 def _register_job(job_id: str) -> Event:
     with active_jobs_lock:
         if job_id in active_jobs:
-            raise HTTPException(status_code=409, detail="任务编号已存在，请重新发起研究。")
+            raise HTTPException(
+                status_code=409, detail="任务编号已存在，请重新发起研究。"
+            )
         event = Event()
         active_jobs[job_id] = event
         return event
@@ -325,7 +340,9 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/research/stream")
-    def stream_research(payload: ResearchRequest, request: Request) -> StreamingResponse:
+    def stream_research(
+        payload: ResearchRequest, request: Request
+    ) -> StreamingResponse:
         emit_metrics = runtime_settings.emit_metrics_event or (
             request.headers.get("x-evaluation-metrics", "").strip() == "1"
         )
@@ -346,7 +363,8 @@ def create_app() -> FastAPI:
                     cancel_event=cancel_event,
                     recorder=recorder,
                 )
-                yield f"data: {json.dumps({'type': 'job', 'job_id': payload.job_id}, ensure_ascii=False)}\n\n"
+                job_event = {"type": "job", "job_id": payload.job_id}
+                yield f"data: {json.dumps(job_event, ensure_ascii=False)}\n\n"
                 for event in agent.run_stream(payload.topic):
                     event.setdefault("job_id", payload.job_id)
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -360,7 +378,11 @@ def create_app() -> FastAPI:
                     yield f"data: {json.dumps(metrics_event, ensure_ascii=False)}\n\n"
             except ResearchCancelledError:
                 recorder.mark_cancelled()
-                event = {"type": "cancelled", "job_id": payload.job_id, "message": "研究任务已取消"}
+                event = {
+                    "type": "cancelled",
+                    "job_id": payload.job_id,
+                    "message": "研究任务已取消",
+                }
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 if emit_metrics:
                     metrics_event = {
