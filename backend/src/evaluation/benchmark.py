@@ -435,10 +435,6 @@ def build_summary(
     report_relevant_cited_total = _nullable_sum_field(
         completed, "report_relevant_cited_sources"
     )
-    context_source_total = _nullable_sum_field(completed, "context_source_count")
-    context_relevant_source_total = _nullable_sum_field(
-        completed, "context_relevant_source_count"
-    )
 
     search_attempts = _sum_field(runs, "search_attempts")
     search_failures = _sum_field(runs, "search_failures")
@@ -520,17 +516,6 @@ def build_summary(
         if report_relevant_cited_total is not None
         and report_unique_urls_total is not None
         else None,
-        "context_source_total": context_source_total,
-        "context_relevant_source_total": context_relevant_source_total,
-        "context_source_relevance_rate_mean": _mean_field(
-            completed, "context_source_relevance_rate"
-        ),
-        "context_source_relevance_rate_weighted": _rate(
-            context_relevant_source_total, context_source_total
-        )
-        if context_relevant_source_total is not None
-        and context_source_total is not None
-        else None,
         "search_failure_rate": _rate(search_failures, search_attempts),
         "fallback_recovery_rate": _rate(fallback_successes, fallback_triggers),
         "failure_stage_counts": dict(sorted(failure_stages.items())),
@@ -554,9 +539,6 @@ def build_summary(
                 ),
                 "report_relevant_source_integrity_rate": item.get(
                     "report_relevant_source_integrity_rate"
-                ),
-                "context_source_relevance_rate": item.get(
-                    "context_source_relevance_rate"
                 ),
                 "failure_stage": item.get("failure_stage"),
             }
@@ -603,9 +585,6 @@ CSV_FIELDS = (
     "report_relevant_cited_sources",
     "report_cited_source_relevance_rate",
     "report_relevant_source_integrity_rate",
-    "context_source_count",
-    "context_relevant_source_count",
-    "context_source_relevance_rate",
     "metrics_complete",
     "report_path",
 )
@@ -682,9 +661,6 @@ def _copy_server_metrics(
         "report_relevant_cited_sources",
         "report_cited_source_relevance_rate",
         "report_relevant_source_integrity_rate",
-        "context_source_count",
-        "context_relevant_source_count",
-        "context_source_relevance_rate",
     )
     for field in fields:
         if metrics is not None and field in metrics:

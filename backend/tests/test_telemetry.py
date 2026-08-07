@@ -191,9 +191,6 @@ def test_source_provenance_metrics_join_the_terminal_snapshot() -> None:
     assert metrics["catalog_sources"] == 5
     assert metrics["catalog_sources_needing_relevance_review"] == 2
     assert metrics["catalog_authoritative_sources"] == 2
-    assert metrics["context_source_count"] == 5
-    assert metrics["context_relevant_source_count"] == 3
-    assert metrics["context_source_relevance_rate"] == 0.6
     assert metrics["mapped_claims"] == 3
     assert metrics["unmapped_claims"] == 2
     assert metrics["unknown_source_ids"] == 1

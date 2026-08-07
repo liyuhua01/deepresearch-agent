@@ -1,6 +1,6 @@
 # Deep Research Agent P0 评测链路 Context Pack
 
-> 状态：Phase A–D 已完成；Phase D 已通过伪 SSE 集成验收和真实预发布 8 题批跑；段落级引用与上下文来源指标已完成单题预发布验收
+> 状态：Phase A–D 已完成；Phase D 已通过伪 SSE 集成验收和真实预发布 8 题批跑；段落级数字引用与报告来源指标已完成单题预发布验收
 >
 > 适用范围：运行埋点、自动引用检查、固定评测执行器
 >
@@ -193,9 +193,9 @@ final_report -> metrics -> done
 
 实施状态（2026-08-07）：已完成首轮真实预发布 A/B 及 B2–B6 同题修复复验。开启组首轮因 DSML 工具包装得到 0/2 映射；B3 修复了工具包装和编号—URL 校验。B5 捕获到搜索后端忽略官方域名限定、返回滑雪场页面的真实失败；B6 增加域名校验、受限多引擎恢复和离题来源剔除后，得到 3/3 Python 官方文档、3/3 URL HTTP 200、5/5 过程结论映射，且未知、错配、裸编号和待复核来源均为 0。Phase D 已在 8 题上验证完成率和引用指标。随后新增确定性数字引用转换和来源有效性指标；来源追踪默认仍保持关闭，待预发布复验后再决定是否默认开启。完整证据见 `docs/benchmarks/PROVENANCE_AB_20260807.md` 和 `docs/benchmarks/PHASE_D_8Q_20260807.md`。
 
-段落级引用补充验收（2026-08-07）：预发布 commit `4632610` 完成 Q01，5/5 来源进入 Prompt 且通过相关性初筛，报告 5/5 URL 可追溯、5/5 可访问；结论邻近覆盖率为 52.94%，仅作诊断，不影响通过。完整证据见 `docs/benchmarks/RELAXED_CITATION_SMOKE_20260807.md`。
+段落级引用补充验收（2026-08-07）：预发布 commit `4632610` 完成 Q01，报告实际引用的 5/5 来源通过主题相关性初筛，5/5 URL 可追溯、5/5 可访问；结论邻近覆盖率为 52.94%，仅作诊断，不影响通过。完整证据见 `docs/benchmarks/RELAXED_CITATION_SMOKE_20260807.md`。
 
-性能修复复验（2026-08-07）：commit `7dd5fa1` 在同一 Q01 上将不必要的报告质量重写从“触发并采用”降为“不触发”，LLM 调用由 6 次降至 5 次，reporting 阶段由 90.138 秒降至 26.657 秒，总耗时由 181.552 秒降至 108.595 秒；上下文来源相关率、报告 URL 可追溯率、报告引用来源相关率和 URL 可访问率均保持 100%。该结果为单次同题方向性证据，正式性能结论仍需多次重复。
+性能修复复验（2026-08-07）：commit `7dd5fa1` 在同一 Q01 上将不必要的报告质量重写从“触发并采用”降为“不触发”，LLM 调用由 6 次降至 5 次，reporting 阶段由 90.138 秒降至 26.657 秒，总耗时由 181.552 秒降至 108.595 秒；报告 URL 可追溯率、报告引用来源相关率和 URL 可访问率均保持 100%。该结果为单次同题方向性证据，正式性能结论仍需多次重复。
 
 新增 `evaluation/provenance.py`，在报告生成之前建立可追踪关系，而不是只在成品报告中猜测引用对应关系：
 
@@ -285,8 +285,6 @@ backend/src/evaluation/domains.py
 - `report_relevant_source_integrity_rate`：报告全部唯一 URL 中，同时满足“来自本次来源目录”和“自动判定与主题相关”的比例。
 
 这些指标用于定位搜索召回、来源绑定和链接可用性问题，不设置统一高阈值。自动相关性筛查是可复算的初筛，不等同于“该来源在语义上支持某一句结论”；需要对外声称支持率时仍应做人工抽样或独立评审。
-
-另外记录过程侧的宽松口径：`context_source_count` 表示已经进入总结/报告 Prompt（模型输入上下文）的来源数，`context_relevant_source_count` 表示其中通过主题相关性初筛的来源数，`context_source_relevance_rate` 表示二者比例。这组指标回答“研究时是否真的给模型提供了相关资料”，作为主要过程指标；不要求模型在最终文章每句话后重复链接。
 
 ## 5. 固定评测执行器设计
 
@@ -390,9 +388,6 @@ report_catalog_url_match_rate
 report_relevant_cited_sources
 report_cited_source_relevance_rate
 report_relevant_source_integrity_rate
-context_source_count
-context_relevant_source_count
-context_source_relevance_rate
 report_path
 metrics_complete
 warnings
