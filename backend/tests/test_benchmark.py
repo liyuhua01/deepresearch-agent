@@ -29,7 +29,7 @@ def _metrics(run_id: str, *, status: str = "completed") -> dict:
         "type": "metrics",
         "job_id": run_id,
         "metrics": {
-            "schema_version": "1.5",
+            "schema_version": "1.6",
             "run_id": run_id,
             "status": status,
             "failure_stage": "search" if status == "failed" else None,
@@ -56,6 +56,9 @@ def _metrics(run_id: str, *, status: str = "completed") -> dict:
             "report_relevant_cited_sources": 2,
             "report_cited_source_relevance_rate": 2 / 3,
             "report_relevant_source_integrity_rate": 2 / 3,
+            "context_source_count": 4,
+            "context_relevant_source_count": 3,
+            "context_source_relevance_rate": 0.75,
             "metrics_complete": True,
             "warnings": [],
         },
@@ -152,6 +155,9 @@ def test_fake_sse_runs_all_eight_and_continues_after_failure(tmp_path: Path) -> 
     assert summary["report_relevant_source_integrity_rate_weighted"] == pytest.approx(
         2 / 3
     )
+    assert summary["context_source_total"] == 28
+    assert summary["context_relevant_source_total"] == 21
+    assert summary["context_source_relevance_rate_weighted"] == 0.75
     assert len(list((tmp_path / "runs").glob("*.json"))) == 8
     assert len(list((tmp_path / "reports").glob("*.md"))) == 8
     assert len((tmp_path / "summary.csv").read_text(encoding="utf-8").splitlines()) == 9

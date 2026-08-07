@@ -153,6 +153,8 @@ def test_reporter_expands_tokens_and_records_final_provenance_audit() -> None:
         "asyncio 适合网络等待 [1](https://docs.python.org/3/library/asyncio.html)。"
     )
     assert "已提取的结论—来源映射" in fake_agent.last_prompt
+    assert "无需每句话都添加" in fake_agent.last_prompt
+    assert "背景阅读的资料可以只列在参考来源章节" in fake_agent.last_prompt
     assert state.provenance_audit["catalog_source_count"] == 1
     assert state.provenance_audit["cited_catalog_source_rate"] == 1.0
     assert state.provenance_audit["report_catalog_url_match_rate"] == 1.0

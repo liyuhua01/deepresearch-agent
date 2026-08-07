@@ -203,7 +203,7 @@ final_report -> metrics -> done
 ```
 
 - `source_id` 使用任务内稳定编号 `T{task_id}-S{index}`，不受并发完成顺序影响。
-- 总结阶段只允许引用本任务目录中的来源编号，没有证据的结论必须标记为待验证；工具调用包装会先被移除，若模型没有输出用户总结，则在同一上下文追加一次禁止工具调用的恢复请求。
+- 总结阶段只允许引用本任务目录中的来源编号；按主题段落或要点组提供来源，同一段多句话可以共用段尾引用，不要求逐句添加。没有证据的结论必须标记为待验证；工具调用包装会先被移除，若模型没有输出用户总结，则在同一上下文追加一次禁止工具调用的恢复请求。
 - 只有来源编号和规范化 URL 准确配对才算有效映射；未知编号、错误 URL 配对和缺少 URL 的裸编号分别计数。
 - 报告阶段接收结构化结论—来源映射，并把 `T1-S1` 或可映射的 `T1-C1` 确定性展开为 `[1](URL)` 形式的可点击数字引用；同一 URL 全文复用同一编号。无法映射的结论编号显示为“待验证”，不会伪造来源。
 - 原有 `sources`、`task_status`、`final_report` 事件类型保持不变，只在开关启用时增加可选字段。
@@ -281,6 +281,8 @@ backend/src/evaluation/domains.py
 - `report_relevant_source_integrity_rate`：报告全部唯一 URL 中，同时满足“来自本次来源目录”和“自动判定与主题相关”的比例。
 
 这些指标用于定位搜索召回、来源绑定和链接可用性问题，不设置统一高阈值。自动相关性筛查是可复算的初筛，不等同于“该来源在语义上支持某一句结论”；需要对外声称支持率时仍应做人工抽样或独立评审。
+
+另外记录过程侧的宽松口径：`context_source_count` 表示已经进入总结/报告 Prompt（模型输入上下文）的来源数，`context_relevant_source_count` 表示其中通过主题相关性初筛的来源数，`context_source_relevance_rate` 表示二者比例。这组指标回答“研究时是否真的给模型提供了相关资料”，作为主要过程指标；不要求模型在最终文章每句话后重复链接。
 
 ## 5. 固定评测执行器设计
 
@@ -384,6 +386,9 @@ report_catalog_url_match_rate
 report_relevant_cited_sources
 report_cited_source_relevance_rate
 report_relevant_source_integrity_rate
+context_source_count
+context_relevant_source_count
+context_source_relevance_rate
 report_path
 metrics_complete
 warnings

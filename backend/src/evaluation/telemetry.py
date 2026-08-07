@@ -21,7 +21,7 @@ def _utc_now() -> datetime:
 class RunRecorder:
     """Collect metrics without becoming a dependency of the research result."""
 
-    schema_version = "1.5"
+    schema_version = "1.6"
 
     def __init__(
         self,
@@ -454,6 +454,22 @@ class RunRecorder:
                     self._catalog_sources_needing_relevance_review
                 ),
                 "catalog_authoritative_sources": (self._catalog_authoritative_sources),
+                "context_source_count": self._catalog_sources,
+                "context_relevant_source_count": max(
+                    0,
+                    self._catalog_sources
+                    - self._catalog_sources_needing_relevance_review,
+                ),
+                "context_source_relevance_rate": (
+                    max(
+                        0,
+                        self._catalog_sources
+                        - self._catalog_sources_needing_relevance_review,
+                    )
+                    / self._catalog_sources
+                    if self._catalog_sources
+                    else None
+                ),
                 "mapped_claims": self._mapped_claims,
                 "unmapped_claims": self._unmapped_claims,
                 "unknown_source_ids": self._unknown_source_ids,
