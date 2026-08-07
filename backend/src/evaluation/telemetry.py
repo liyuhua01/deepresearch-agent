@@ -21,7 +21,7 @@ def _utc_now() -> datetime:
 class RunRecorder:
     """Collect metrics without becoming a dependency of the research result."""
 
-    schema_version = "1.4"
+    schema_version = "1.5"
 
     def __init__(
         self,
@@ -89,6 +89,11 @@ class RunRecorder:
         self._unlinked_source_ids = 0
         self._report_cited_catalog_sources: int | None = None
         self._report_cited_catalog_source_rate: float | None = None
+        self._report_unique_urls: int | None = None
+        self._report_catalog_url_match_rate: float | None = None
+        self._report_relevant_cited_sources: int | None = None
+        self._report_cited_source_relevance_rate: float | None = None
+        self._report_relevant_source_integrity_rate: float | None = None
         self._report_uncatalogued_urls: int | None = None
         self._report_unknown_source_ids: int | None = None
         self._report_duplicate_citations: int | None = None
@@ -264,9 +269,7 @@ class RunRecorder:
                 self._mapped_claims += max(0, int(mapped))
                 self._unmapped_claims += max(0, int(unmapped))
                 self._unknown_source_ids += max(0, int(unknown_source_ids))
-                self._mismatched_source_ids += max(
-                    0, int(mismatched_source_ids)
-                )
+                self._mismatched_source_ids += max(0, int(mismatched_source_ids))
                 self._unlinked_source_ids += max(0, int(unlinked_source_ids))
         except Exception as exc:
             self.add_warning(f"claim_provenance_metric_failed:{type(exc).__name__}")
@@ -283,6 +286,30 @@ class RunRecorder:
                 rate = audit.get("cited_catalog_source_rate")
                 self._report_cited_catalog_source_rate = (
                     min(1.0, max(0.0, float(rate))) if rate is not None else None
+                )
+                self._report_unique_urls = max(
+                    0, int(audit.get("report_unique_url_count", 0))
+                )
+                catalog_match_rate = audit.get("report_catalog_url_match_rate")
+                self._report_catalog_url_match_rate = (
+                    min(1.0, max(0.0, float(catalog_match_rate)))
+                    if catalog_match_rate is not None
+                    else None
+                )
+                self._report_relevant_cited_sources = max(
+                    0, int(audit.get("report_relevant_cited_source_count", 0))
+                )
+                relevance_rate = audit.get("report_cited_source_relevance_rate")
+                self._report_cited_source_relevance_rate = (
+                    min(1.0, max(0.0, float(relevance_rate)))
+                    if relevance_rate is not None
+                    else None
+                )
+                integrity_rate = audit.get("report_relevant_source_integrity_rate")
+                self._report_relevant_source_integrity_rate = (
+                    min(1.0, max(0.0, float(integrity_rate)))
+                    if integrity_rate is not None
+                    else None
                 )
                 self._report_uncatalogued_urls = max(
                     0, int(audit.get("uncatalogued_url_count", 0))
@@ -311,9 +338,7 @@ class RunRecorder:
                 self._report_quality_retry_applied = bool(
                     audit.get("report_quality_retry_applied", False)
                 )
-                self._final_claim_units = max(
-                    0, int(audit.get("final_claim_units", 0))
-                )
+                self._final_claim_units = max(0, int(audit.get("final_claim_units", 0)))
                 self._final_claim_units_with_citations = max(
                     0, int(audit.get("final_claim_units_with_citations", 0))
                 )
@@ -428,9 +453,7 @@ class RunRecorder:
                 "catalog_sources_needing_relevance_review": (
                     self._catalog_sources_needing_relevance_review
                 ),
-                "catalog_authoritative_sources": (
-                    self._catalog_authoritative_sources
-                ),
+                "catalog_authoritative_sources": (self._catalog_authoritative_sources),
                 "mapped_claims": self._mapped_claims,
                 "unmapped_claims": self._unmapped_claims,
                 "unknown_source_ids": self._unknown_source_ids,
@@ -439,6 +462,15 @@ class RunRecorder:
                 "report_cited_catalog_sources": self._report_cited_catalog_sources,
                 "report_cited_catalog_source_rate": (
                     self._report_cited_catalog_source_rate
+                ),
+                "report_unique_urls": self._report_unique_urls,
+                "report_catalog_url_match_rate": (self._report_catalog_url_match_rate),
+                "report_relevant_cited_sources": (self._report_relevant_cited_sources),
+                "report_cited_source_relevance_rate": (
+                    self._report_cited_source_relevance_rate
+                ),
+                "report_relevant_source_integrity_rate": (
+                    self._report_relevant_source_integrity_rate
                 ),
                 "report_uncatalogued_urls": self._report_uncatalogued_urls,
                 "report_unknown_source_ids": self._report_unknown_source_ids,
@@ -452,16 +484,12 @@ class RunRecorder:
                 "report_quality_retry_attempted": (
                     self._report_quality_retry_attempted
                 ),
-                "report_quality_retry_applied": (
-                    self._report_quality_retry_applied
-                ),
+                "report_quality_retry_applied": (self._report_quality_retry_applied),
                 "final_claim_units": self._final_claim_units,
                 "final_claim_units_with_citations": (
                     self._final_claim_units_with_citations
                 ),
-                "final_claim_citation_coverage": (
-                    self._final_claim_citation_coverage
-                ),
+                "final_claim_citation_coverage": (self._final_claim_citation_coverage),
                 "metrics_complete": not self._warnings,
                 "warnings": list(self._warnings),
             }

@@ -169,6 +169,7 @@ class BenchmarkRunner:
         events: list[dict[str, Any]] = []
         report = ""
         server_metrics: dict[str, Any] | None = None
+        provenance_audit: dict[str, Any] | None = None
         status = "incomplete"
         failure_stage: str | None = None
         failure_type: str | None = None
@@ -195,11 +196,21 @@ class BenchmarkRunner:
                 response.raise_for_status()
                 for event in parse_sse_lines(response.iter_lines()):
                     event_type = str(event.get("type") or "")
-                    if event_type in {"final_report", "done", "error", "cancelled", "metrics"}:
+                    if event_type in {
+                        "final_report",
+                        "done",
+                        "error",
+                        "cancelled",
+                        "metrics",
+                    }:
                         events.append(event)
                     if event_type == "final_report":
                         report = str(event.get("report") or "")
-                    elif event_type == "metrics" and isinstance(event.get("metrics"), dict):
+                        if isinstance(event.get("provenance_audit"), dict):
+                            provenance_audit = dict(event["provenance_audit"])
+                    elif event_type == "metrics" and isinstance(
+                        event.get("metrics"), dict
+                    ):
                         server_metrics = dict(event["metrics"])
                     elif event_type == "error":
                         status = "failed"
@@ -275,12 +286,29 @@ class BenchmarkRunner:
             "claim_units": citation.claim_units,
             "claim_units_with_citations": citation.claim_units_with_citations,
             "claim_citation_coverage": citation.claim_citation_coverage,
+            "report_unique_urls": (provenance_audit or {}).get(
+                "report_unique_url_count"
+            ),
+            "report_cited_catalog_sources": (provenance_audit or {}).get(
+                "cited_catalog_source_count"
+            ),
+            "report_catalog_url_match_rate": (provenance_audit or {}).get(
+                "report_catalog_url_match_rate"
+            ),
+            "report_relevant_cited_sources": (provenance_audit or {}).get(
+                "report_relevant_cited_source_count"
+            ),
+            "report_cited_source_relevance_rate": (provenance_audit or {}).get(
+                "report_cited_source_relevance_rate"
+            ),
+            "report_relevant_source_integrity_rate": (provenance_audit or {}).get(
+                "report_relevant_source_integrity_rate"
+            ),
             "report_path": report_rel,
             "report_chars": len(report),
             "sse_terminal_events": events,
-            "metrics_complete": bool(server_metrics) and bool(
-                server_metrics.get("metrics_complete", False)
-            ),
+            "metrics_complete": bool(server_metrics)
+            and bool(server_metrics.get("metrics_complete", False)),
             "warnings": _dedupe(
                 [*warnings, *list((server_metrics or {}).get("warnings") or [])]
             ),
@@ -299,7 +327,9 @@ class BenchmarkRunner:
         except httpx.HTTPError as exc:
             warnings.append(f"cancel_failed:{type(exc).__name__}")
 
-    def _audit_accessibility(self, citation: Any, warnings: list[str]) -> dict[str, Any]:
+    def _audit_accessibility(
+        self, citation: Any, warnings: list[str]
+    ) -> dict[str, Any]:
         if not self.check_accessibility or not citation.citations:
             return {"accessible_count": None, "accessibility_rate": None, "results": []}
         try:
@@ -380,7 +410,9 @@ def parse_sse_lines(lines: Iterable[str]) -> Iterable[dict[str, Any]]:
         yield json.loads("\n".join(data_lines))
 
 
-def build_summary(runs: list[dict[str, Any]], manifest: dict[str, Any]) -> dict[str, Any]:
+def build_summary(
+    runs: list[dict[str, Any]], manifest: dict[str, Any]
+) -> dict[str, Any]:
     """Aggregate runs using explicit denominators and reproducible percentiles."""
     completed = [item for item in runs if item.get("status") == "completed"]
     successful = [item for item in runs if item.get("benchmark_success") is True]
@@ -388,12 +420,21 @@ def build_summary(runs: list[dict[str, Any]], manifest: dict[str, Any]) -> dict[
     durations = [item for item in durations if item is not None]
     coverages = [_number(item.get("claim_citation_coverage")) for item in completed]
     coverages = [item for item in coverages if item is not None]
-    access_rates = [_number(item.get("citation_accessibility_rate")) for item in completed]
+    access_rates = [
+        _number(item.get("citation_accessibility_rate")) for item in completed
+    ]
     access_rates = [item for item in access_rates if item is not None]
     accessible_total = _nullable_sum_field(completed, "citation_accessible_count")
     citation_unique_total = _sum_field(completed, "citation_count_unique")
     claim_units_total = _sum_field(completed, "claim_units")
     cited_claim_units_total = _sum_field(completed, "claim_units_with_citations")
+    report_unique_urls_total = _nullable_sum_field(completed, "report_unique_urls")
+    report_cited_catalog_total = _nullable_sum_field(
+        completed, "report_cited_catalog_sources"
+    )
+    report_relevant_cited_total = _nullable_sum_field(
+        completed, "report_relevant_cited_sources"
+    )
 
     search_attempts = _sum_field(runs, "search_attempts")
     search_failures = _sum_field(runs, "search_failures")
@@ -445,11 +486,42 @@ def build_summary(runs: list[dict[str, Any]], manifest: dict[str, Any]) -> dict[
         "citation_accessibility_rate_mean": _mean(access_rates),
         "citation_accessibility_rate_weighted": _rate(
             accessible_total, citation_unique_total
-        ) if accessible_total is not None else None,
+        )
+        if accessible_total is not None
+        else None,
+        "report_catalog_url_match_rate_mean": _mean_field(
+            completed, "report_catalog_url_match_rate"
+        ),
+        "report_catalog_url_match_rate_weighted": _rate(
+            report_cited_catalog_total, report_unique_urls_total
+        )
+        if report_cited_catalog_total is not None
+        and report_unique_urls_total is not None
+        else None,
+        "report_cited_source_relevance_rate_mean": _mean_field(
+            completed, "report_cited_source_relevance_rate"
+        ),
+        "report_cited_source_relevance_rate_weighted": _rate(
+            report_relevant_cited_total, report_cited_catalog_total
+        )
+        if report_relevant_cited_total is not None
+        and report_cited_catalog_total is not None
+        else None,
+        "report_relevant_source_integrity_rate_mean": _mean_field(
+            completed, "report_relevant_source_integrity_rate"
+        ),
+        "report_relevant_source_integrity_rate_weighted": _rate(
+            report_relevant_cited_total, report_unique_urls_total
+        )
+        if report_relevant_cited_total is not None
+        and report_unique_urls_total is not None
+        else None,
         "search_failure_rate": _rate(search_failures, search_attempts),
         "fallback_recovery_rate": _rate(fallback_successes, fallback_triggers),
         "failure_stage_counts": dict(sorted(failure_stages.items())),
-        "metrics_complete_count": sum(bool(item.get("metrics_complete")) for item in runs),
+        "metrics_complete_count": sum(
+            bool(item.get("metrics_complete")) for item in runs
+        ),
         "runs": [
             {
                 "run_id": item.get("run_id"),
@@ -459,6 +531,15 @@ def build_summary(runs: list[dict[str, Any]], manifest: dict[str, Any]) -> dict[
                 "total_duration_ms": item.get("total_duration_ms"),
                 "citation_count_unique": item.get("citation_count_unique"),
                 "claim_citation_coverage": item.get("claim_citation_coverage"),
+                "report_catalog_url_match_rate": item.get(
+                    "report_catalog_url_match_rate"
+                ),
+                "report_cited_source_relevance_rate": item.get(
+                    "report_cited_source_relevance_rate"
+                ),
+                "report_relevant_source_integrity_rate": item.get(
+                    "report_relevant_source_integrity_rate"
+                ),
                 "failure_stage": item.get("failure_stage"),
             }
             for item in runs
@@ -498,6 +579,12 @@ CSV_FIELDS = (
     "claim_units",
     "claim_units_with_citations",
     "claim_citation_coverage",
+    "report_unique_urls",
+    "report_cited_catalog_sources",
+    "report_catalog_url_match_rate",
+    "report_relevant_cited_sources",
+    "report_cited_source_relevance_rate",
+    "report_relevant_source_integrity_rate",
     "metrics_complete",
     "report_path",
 )
@@ -518,7 +605,9 @@ def write_summary_csv(path: Path, runs: list[dict[str, Any]]) -> None:
             delete=False,
         ) as handle:
             temporary_path = Path(handle.name)
-            writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, extrasaction="ignore")
+            writer = csv.DictWriter(
+                handle, fieldnames=CSV_FIELDS, extrasaction="ignore"
+            )
             writer.writeheader()
             for item in runs:
                 writer.writerow({key: item.get(key) for key in CSV_FIELDS})
@@ -546,7 +635,9 @@ def resolve_git_commit() -> str | None:
         return None
 
 
-def _copy_server_metrics(target: dict[str, Any], metrics: dict[str, Any] | None) -> None:
+def _copy_server_metrics(
+    target: dict[str, Any], metrics: dict[str, Any] | None
+) -> None:
     fields = (
         "schema_version",
         "stage_durations_ms",
@@ -564,9 +655,18 @@ def _copy_server_metrics(target: dict[str, Any], metrics: dict[str, Any] | None)
         "search_failures",
         "fallback_triggers",
         "fallback_successes",
+        "report_unique_urls",
+        "report_cited_catalog_sources",
+        "report_catalog_url_match_rate",
+        "report_relevant_cited_sources",
+        "report_cited_source_relevance_rate",
+        "report_relevant_source_integrity_rate",
     )
     for field in fields:
-        target[field] = (metrics or {}).get(field)
+        if metrics is not None and field in metrics:
+            target[field] = metrics[field]
+        elif field not in target:
+            target[field] = None
 
 
 def _is_terminal_run(path: Path) -> bool:
@@ -629,16 +729,22 @@ def _number(value: Any) -> float | None:
 
 
 def _sum_field(items: list[dict[str, Any]], field: str) -> float:
-    return sum(value for item in items if (value := _number(item.get(field))) is not None)
+    return sum(
+        value for item in items if (value := _number(item.get(field))) is not None
+    )
 
 
 def _nullable_sum_field(items: list[dict[str, Any]], field: str) -> float | None:
-    values = [value for item in items if (value := _number(item.get(field))) is not None]
+    values = [
+        value for item in items if (value := _number(item.get(field))) is not None
+    ]
     return sum(values) if values else None
 
 
 def _mean_field(items: list[dict[str, Any]], field: str) -> float | None:
-    values = [value for item in items if (value := _number(item.get(field))) is not None]
+    values = [
+        value for item in items if (value := _number(item.get(field))) is not None
+    ]
     return _mean(values)
 
 

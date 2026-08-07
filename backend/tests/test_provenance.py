@@ -11,6 +11,7 @@ from evaluation.provenance import (
     expand_source_tokens,
     extract_claim_mappings,
     rank_search_results,
+    render_numbered_citations,
 )
 
 
@@ -126,6 +127,30 @@ def test_source_relevance_is_flagged_without_dropping_results() -> None:
     assert records[1].relevance_status == "needs_review"
 
 
+def test_relevance_screen_uses_distinctive_chinese_terms_not_generic_api_words() -> (
+    None
+):
+    records = build_source_records(
+        {
+            "results": [
+                {
+                    "title": "欧盟人工智能法案的生效时间与提供者义务",
+                    "url": "https://example.eu/ai-act-obligations",
+                },
+                {
+                    "title": "Windows Search API reference",
+                    "url": "https://learn.microsoft.com/windows/search/api",
+                },
+            ]
+        },
+        task_id=4,
+        relevance_text="梳理欧盟 AI Act 提供者主要义务和生效时间线",
+    )
+
+    assert records[0].relevance_status == "likely_relevant"
+    assert records[1].relevance_status == "needs_review"
+
+
 def test_search_ranking_prefers_authoritative_relevant_and_diverse_sources() -> None:
     ranked = rank_search_results(
         {
@@ -215,6 +240,46 @@ def test_bare_source_tokens_expand_to_clickable_links_without_touching_unknowns(
     assert "[T2-S9]" in expanded
 
 
+def test_source_and_claim_tokens_render_as_stable_clickable_numbers() -> None:
+    claims = [
+        ClaimMapping("T2-C1", 2, "有两个来源的结论", ("T2-S1", "T2-S2"), ()),
+        ClaimMapping("T2-C2", 2, "没有来源的结论", (), ()),
+    ]
+    report = (
+        "直接来源 [T2-S1]；同一来源 "
+        "[标题](https://docs.python.org/3/library/asyncio.html)；"
+        "结论映射 [T2-C1]；未映射结论 [T2-C2]。"
+    )
+
+    rendered = render_numbered_citations(
+        report,
+        sources=_sources(),
+        claims=claims,
+    )
+
+    assert rendered.count("[1](https://docs.python.org/3/library/asyncio.html)") == 3
+    assert "[2](https://docs.python.org/3/library/threading.html)" in rendered
+    assert "未映射结论 [待验证]" in rendered
+    assert "T2-C" not in rendered
+
+
+def test_linked_internal_ids_cannot_substitute_an_uncatalogued_url() -> None:
+    claims = [ClaimMapping("T2-C1", 2, "结论", ("T2-S1",), ())]
+    report = (
+        "来源 [T2-S1](https://evil.example/source)，"
+        "结论 [T2-C1](https://evil.example/claim)。"
+    )
+
+    rendered = render_numbered_citations(
+        report,
+        sources=_sources(),
+        claims=claims,
+    )
+
+    assert "evil.example" not in rendered
+    assert rendered.count("[1](https://docs.python.org/3/library/asyncio.html)") == 2
+
+
 def test_only_adjacent_same_url_citations_are_collapsed() -> None:
     report = (
         "来源："
@@ -246,11 +311,38 @@ def test_final_audit_distinguishes_catalog_sources_and_uncatalogued_urls() -> No
     assert audit.catalog_source_count == 2
     assert audit.cited_catalog_source_count == 1
     assert audit.cited_catalog_source_rate == 0.5
+    assert audit.report_catalog_url_match_rate == 0.5
     assert audit.uncatalogued_url_count == 1
     assert audit.mapped_claim_count == 1
     assert audit.unmapped_claim_count == 1
     assert audit.report_duplicate_citation_count == 0
     assert audit.report_duplicate_citation_rate == 0.0
+
+
+def test_final_audit_separates_catalog_existence_from_topic_relevance() -> None:
+    sources = [
+        SourceRecord(
+            **{
+                **source.__dict__,
+                "relevance_status": (
+                    "likely_relevant" if source.source_id == "T2-S1" else "needs_review"
+                ),
+            }
+        )
+        for source in _sources()
+    ]
+    report = (
+        "相关来源 [1](https://docs.python.org/3/library/asyncio.html)，"
+        "待复核来源 [2](https://docs.python.org/3/library/threading.html)，"
+        "目录外来源 [3](https://example.com/outside)。"
+    )
+
+    audit = audit_provenance(report, sources=sources, claims=[])
+
+    assert audit.report_catalog_url_match_rate == 2 / 3
+    assert audit.report_relevant_cited_source_count == 1
+    assert audit.report_cited_source_relevance_rate == 0.5
+    assert audit.report_relevant_source_integrity_rate == 1 / 3
 
 
 def test_final_audit_reports_duplicate_and_concentrated_citations() -> None:

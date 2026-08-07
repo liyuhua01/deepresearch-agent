@@ -77,9 +77,7 @@ def test_summarizer_retries_when_first_turn_contains_only_dsml_tool_call() -> No
     task = TodoItem(id=1, title="并发", intent="比较", query="asyncio")
     task.source_records = [_source()]
 
-    summary = service.summarize_task(
-        SummaryState(research_topic="并发"), task, "证据"
-    )
+    summary = service.summarize_task(SummaryState(research_topic="并发"), task, "证据")
 
     assert summary == final_summary
     assert len(agent.prompts) == 2
@@ -101,18 +99,14 @@ def test_summarizer_discards_partial_tool_payload_before_summary_heading() -> No
     task = TodoItem(id=1, title="并发", intent="比较", query="asyncio")
     task.source_records = [_source()]
 
-    summary = service.summarize_task(
-        SummaryState(research_topic="并发"), task, "证据"
-    )
+    summary = service.summarize_task(SummaryState(research_topic="并发"), task, "证据")
 
     assert summary.startswith("## 任务总结")
     assert '"content"' not in summary
     assert len(agent.prompts) == 1
 
 
-def test_summarizer_retries_for_nonempty_tool_payload_without_summary_heading() -> (
-    None
-):
+def test_summarizer_retries_for_nonempty_tool_payload_without_summary_heading() -> None:
     payload = '我先同步笔记。\n, "content": "只有内部笔记"}]'
     recovered = (
         "## 任务总结\n"
@@ -127,9 +121,7 @@ def test_summarizer_retries_for_nonempty_tool_payload_without_summary_heading() 
     task = TodoItem(id=1, title="并发", intent="比较", query="asyncio")
     task.source_records = [_source()]
 
-    summary = service.summarize_task(
-        SummaryState(research_topic="并发"), task, "证据"
-    )
+    summary = service.summarize_task(SummaryState(research_topic="并发"), task, "证据")
 
     assert summary == recovered
     assert len(agent.prompts) == 2
@@ -158,12 +150,12 @@ def test_reporter_expands_tokens_and_records_final_provenance_audit() -> None:
     report = service.generate_report(state)
 
     assert report == (
-        "asyncio 适合网络等待 "
-        "[Python 官方文档](https://docs.python.org/3/library/asyncio.html)。"
+        "asyncio 适合网络等待 [1](https://docs.python.org/3/library/asyncio.html)。"
     )
     assert "已提取的结论—来源映射" in fake_agent.last_prompt
     assert state.provenance_audit["catalog_source_count"] == 1
     assert state.provenance_audit["cited_catalog_source_rate"] == 1.0
+    assert state.provenance_audit["report_catalog_url_match_rate"] == 1.0
 
 
 def test_reporter_applies_better_low_duplication_revision() -> None:
@@ -251,7 +243,7 @@ def test_reporter_rejects_revision_that_drops_source_diversity() -> None:
 
     report = service.generate_report(state)
 
-    assert "线程官方文档" in report
+    assert "[2](https://docs.python.org/3/library/threading.html)" in report
     assert state.provenance_audit["report_quality_retry_attempted"] is True
     assert state.provenance_audit["report_quality_retry_applied"] is False
     assert state.provenance_audit["report_unique_url_count"] == 2

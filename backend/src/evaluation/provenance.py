@@ -17,6 +17,12 @@ from evaluation.citations import (
 from evaluation.domains import classify_domain
 
 _SOURCE_TOKEN = re.compile(r"\[(T\d+-S\d+)\](?!\()")
+_CITATION_REFERENCE = re.compile(
+    r"\[(?P<link_label>[^\]]+)\]\((?P<link_url>https?://[^)\s]+)\)"
+    r"|\[(?P<source_id>T\d+-S\d+)\](?!\()"
+    r"|\[(?P<claim_id>T\d+-C\d+)\](?!\()",
+    re.IGNORECASE,
+)
 _SOURCE_ID_ANYWHERE = re.compile(r"T\d+-S\d+")
 _SOURCE_LINK = re.compile(r"\[(T\d+-S\d+)\]\((https?://[^)\s]+)\)")
 _MARKDOWN_CITATION_LINK = re.compile(
@@ -30,16 +36,35 @@ _PROVENANCE_META = re.compile(
 )
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])")
 _TERM = re.compile(r"[A-Za-z][A-Za-z0-9]{2,}|[\u3400-\u9fff]{2,}")
+_HAN_SEQUENCE = re.compile(r"[\u3400-\u9fff]{2,}")
 _GENERIC_TERMS = {
+    "agent",
+    "application",
+    "cost",
+    "model",
+    "performance",
     "python",
+    "research",
+    "search",
+    "system",
     "using",
     "guide",
     "tutorial",
     "documentation",
     "docs",
+    "api",
+    "主要",
+    "分析",
+    "应用",
     "比较",
     "建议",
     "场景",
+    "技术",
+    "方案",
+    "来源",
+    "研究",
+    "系统",
+    "问题",
 }
 _SOURCE_TYPE_WEIGHTS = {
     "government": 6,
@@ -90,6 +115,10 @@ class ProvenanceAudit:
     catalog_authoritative_source_count: int
     cited_catalog_source_count: int
     cited_catalog_source_rate: float | None
+    report_catalog_url_match_rate: float | None
+    report_relevant_cited_source_count: int
+    report_cited_source_relevance_rate: float | None
+    report_relevant_source_integrity_rate: float | None
     report_unique_url_count: int
     report_citation_count_raw: int
     report_domain_count: int
@@ -203,9 +232,7 @@ def extract_claim_mappings(
                 known.append(source_id)
             else:
                 mismatched.append(source_id)
-        unknown = tuple(
-            source_id for source_id in mentioned if source_id not in by_id
-        )
+        unknown = tuple(source_id for source_id in mentioned if source_id not in by_id)
         mappings.append(
             ClaimMapping(
                 claim_id=f"T{task_id}-C{len(mappings) + 1}",
@@ -231,6 +258,74 @@ def expand_source_tokens(markdown: str, sources: list[SourceRecord]) -> str:
         return f"[{_escape_markdown_label(source.title)}]({source.normalized_url})"
 
     return _SOURCE_TOKEN.sub(replace, markdown)
+
+
+def render_numbered_citations(
+    markdown: str,
+    *,
+    sources: list[SourceRecord],
+    claims: list[ClaimMapping],
+) -> str:
+    """Render source and claim tokens as stable clickable numeric citations.
+
+    Source URLs are always taken from the validated catalog. Claim tokens expand
+    through their process-time claim-to-source mapping. Unmapped claim tokens are
+    labelled as unverified instead of being presented as citations.
+    """
+    source_by_id = {source.source_id: source for source in sources}
+    claim_by_id = {claim.claim_id: claim for claim in claims}
+    number_by_url: dict[str, int] = {}
+
+    def citation_for_source_ids(source_ids: tuple[str, ...] | list[str]) -> str:
+        rendered: list[str] = []
+        seen_urls: set[str] = set()
+        for source_id in source_ids:
+            source = source_by_id.get(source_id)
+            if source is None or source.normalized_url in seen_urls:
+                continue
+            seen_urls.add(source.normalized_url)
+            number = number_by_url.setdefault(
+                source.normalized_url,
+                len(number_by_url) + 1,
+            )
+            rendered.append(f"[{number}]({source.normalized_url})")
+        return " ".join(rendered)
+
+    source_id_by_url = {source.normalized_url: source.source_id for source in sources}
+
+    def replace_reference(match: re.Match[str]) -> str:
+        source_id = match.group("source_id")
+        claim_id = match.group("claim_id")
+        link_label = match.group("link_label")
+        link_url = match.group("link_url")
+
+        if source_id:
+            return citation_for_source_ids([source_id]) or match.group(0)
+        if claim_id:
+            claim = claim_by_id.get(claim_id)
+            return (
+                citation_for_source_ids(claim.source_ids if claim else []) or "[待验证]"
+            )
+
+        # A linked internal ID must still resolve through the validated catalog;
+        # never trust a model-supplied URL paired with that ID.
+        if link_label in source_by_id:
+            return citation_for_source_ids([link_label]) or match.group(0)
+        if link_label in claim_by_id or re.fullmatch(r"T\d+-C\d+", link_label):
+            claim = claim_by_id.get(link_label)
+            return (
+                citation_for_source_ids(claim.source_ids if claim else []) or "[待验证]"
+            )
+
+        # Direct links to catalog sources are normalized to the same compact
+        # numbering scheme. Non-catalog links remain visible for the audit to flag.
+        normalized = normalize_url(link_url)
+        catalog_source_id = source_id_by_url.get(normalized or "")
+        if catalog_source_id:
+            return citation_for_source_ids([catalog_source_id])
+        return match.group(0)
+
+    return _CITATION_REFERENCE.sub(replace_reference, markdown)
 
 
 def collapse_adjacent_duplicate_citations(markdown: str) -> str:
@@ -270,6 +365,12 @@ def audit_provenance(
     report_urls = {citation.normalized_url for citation in citation_audit.citations}
     catalog_urls = {source.normalized_url for source in sources}
     cited_catalog = report_urls & catalog_urls
+    relevant_catalog_urls = {
+        source.normalized_url
+        for source in sources
+        if source.relevance_status == "likely_relevant"
+    }
+    relevant_cited = cited_catalog & relevant_catalog_urls
     mapped_claims = sum(bool(claim.source_ids) for claim in claims)
     duplicate_count = max(
         0,
@@ -283,13 +384,22 @@ def audit_provenance(
             source.relevance_status == "needs_review" for source in sources
         ),
         catalog_authoritative_source_count=sum(
-            source.source_type
-            in {"government", "official_documentation", "academic"}
+            source.source_type in {"government", "official_documentation", "academic"}
             for source in sources
         ),
         cited_catalog_source_count=len(cited_catalog),
         cited_catalog_source_rate=(
             len(cited_catalog) / len(catalog_urls) if catalog_urls else None
+        ),
+        report_catalog_url_match_rate=(
+            len(cited_catalog) / len(report_urls) if report_urls else None
+        ),
+        report_relevant_cited_source_count=len(relevant_cited),
+        report_cited_source_relevance_rate=(
+            len(relevant_cited) / len(cited_catalog) if cited_catalog else None
+        ),
+        report_relevant_source_integrity_rate=(
+            len(relevant_cited) / len(report_urls) if report_urls else None
         ),
         report_unique_url_count=len(report_urls),
         report_citation_count_raw=citation_audit.citation_count_raw,
@@ -387,11 +497,16 @@ def rank_search_results(
     domain_counts: dict[str, int] = {}
     for _, _, domain, item in ranked:
         source_type = classify_domain(domain, str(item.get("url") or ""))
-        domain_limit = 3 if source_type in {
-            "government",
-            "official_documentation",
-            "academic",
-        } else 2
+        domain_limit = (
+            3
+            if source_type
+            in {
+                "government",
+                "official_documentation",
+                "academic",
+            }
+            else 2
+        )
         if domain_counts.get(domain, 0) >= domain_limit:
             continue
         selected.append(item)
@@ -432,10 +547,9 @@ def _relevance_terms(text: str) -> set[str]:
     expanded = _CAMEL_BOUNDARY.sub(" ", text)
     expanded = re.sub(r"[._+/-]+", " ", expanded)
     lowered = expanded.lower()
-    terms = {
-        match.group(0).lower()
-        for match in _TERM.finditer(lowered)
-    }
+    terms = {match.group(0).lower() for match in _TERM.finditer(lowered)}
+    for sequence in _HAN_SEQUENCE.findall(lowered):
+        terms.update(sequence[index : index + 2] for index in range(len(sequence) - 1))
     if "threadpoolexecutor" in text.lower():
         terms.update({"thread", "pool", "executor", "concurrent", "futures"})
     if "asyncio" in terms:

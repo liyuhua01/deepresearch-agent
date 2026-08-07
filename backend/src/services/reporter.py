@@ -11,8 +11,8 @@ from config import Configuration
 from evaluation.provenance import (
     audit_provenance,
     collapse_adjacent_duplicate_citations,
-    expand_source_tokens,
     format_source_catalog,
+    render_numbered_citations,
 )
 from models import SummaryState
 from services.text_processing import strip_tool_calls
@@ -22,7 +22,9 @@ from utils import strip_thinking_tokens
 class ReportingService:
     """Generates the final structured report."""
 
-    def __init__(self, report_agent: ToolAwareSimpleAgent, config: Configuration) -> None:
+    def __init__(
+        self, report_agent: ToolAwareSimpleAgent, config: Configuration
+    ) -> None:
         self._agent = report_agent
         self._config = config
 
@@ -49,10 +51,16 @@ class ReportingService:
                     f"- 任务 {task.id}《{task.title}》：note_id={task.note_id}"
                 )
 
-        notes_section = "\n".join(note_references) if note_references else "- 暂无可用任务笔记"
+        notes_section = (
+            "\n".join(note_references) if note_references else "- 暂无可用任务笔记"
+        )
 
-        all_sources = [source for task in state.todo_items for source in task.source_records]
-        all_claims = [claim for task in state.todo_items for claim in task.claim_mappings]
+        all_sources = [
+            source for task in state.todo_items for source in task.source_records
+        ]
+        all_claims = [
+            claim for task in state.todo_items for claim in task.claim_mappings
+        ]
         provenance_section = ""
         if self._config.enable_source_provenance and all_sources:
             claim_lines = []
@@ -68,8 +76,10 @@ class ReportingService:
                 f"{chr(10).join(claim_lines) or '- 暂无映射'}\n"
                 "\n<最终报告引用要求>\n"
                 "- 每条事实性结论后紧邻一个或多个来源编号。\n"
-                "- 可输出 `[T1-S1]`，系统会展开为来源标题和真实链接；"
+                "- 请输出 `[T1-S1]`，系统会将它转换为可点击的数字引用；"
                 "也可直接输出 `[来源标题](URL)`。\n"
+                "- `T1-C1` 是内部结论编号，不是来源编号，禁止把"
+                " `[T1-C1]` 当成最终引用。\n"
                 "- 只能使用目录中存在的编号和 URL，不得把引用集中到文末代替内联引用。\n"
                 "- 标有‘相关性待复核’的来源不得单独支撑核心结论；无法确认相关性时"
                 "应忽略或标注待验证。\n"
@@ -77,7 +87,9 @@ class ReportingService:
                 "</最终报告引用要求>\n"
             )
 
-        read_template = json.dumps({"action": "read", "note_id": "<note_id>"}, ensure_ascii=False)
+        read_template = json.dumps(
+            {"action": "read", "note_id": "<note_id>"}, ensure_ascii=False
+        )
         create_conclusion_template = json.dumps(
             {
                 "action": "create",
@@ -106,7 +118,11 @@ class ReportingService:
             return report_text or "报告生成失败，请检查输入。"
 
         report_text = collapse_adjacent_duplicate_citations(
-            expand_source_tokens(report_text, all_sources)
+            render_numbered_citations(
+                report_text,
+                sources=all_sources,
+                claims=all_claims,
+            )
         )
         audit = audit_provenance(
             report_text,
@@ -121,7 +137,11 @@ class ReportingService:
                     self._agent.run(self._build_quality_revision_prompt(audit))
                 )
                 revised = collapse_adjacent_duplicate_citations(
-                    expand_source_tokens(revised, all_sources)
+                    render_numbered_citations(
+                        revised,
+                        sources=all_sources,
+                        claims=all_claims,
+                    )
                 )
                 revised_audit = audit_provenance(
                     revised,
@@ -189,12 +209,12 @@ class ReportingService:
         )
         if revised.report_unique_url_count < minimum_unique_sources:
             return False
-        original_coverage = original.final_claim_citation_coverage
-        revised_coverage = revised.final_claim_citation_coverage
+        original_integrity = original.report_relevant_source_integrity_rate
+        revised_integrity = revised.report_relevant_source_integrity_rate
         if (
-            original_coverage is not None
-            and revised_coverage is not None
-            and revised_coverage < original_coverage - 0.1
+            original_integrity is not None
+            and revised_integrity is not None
+            and revised_integrity < original_integrity
         ):
             return False
         original_duplicate = original.report_duplicate_citation_rate or 0

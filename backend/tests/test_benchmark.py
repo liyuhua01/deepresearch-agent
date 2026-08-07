@@ -7,6 +7,7 @@ import stat
 from pathlib import Path
 
 import httpx
+import pytest
 
 from evaluation.benchmark import (
     BenchmarkRunner,
@@ -28,7 +29,7 @@ def _metrics(run_id: str, *, status: str = "completed") -> dict:
         "type": "metrics",
         "job_id": run_id,
         "metrics": {
-            "schema_version": "1.4",
+            "schema_version": "1.5",
             "run_id": run_id,
             "status": status,
             "failure_stage": "search" if status == "failed" else None,
@@ -49,6 +50,12 @@ def _metrics(run_id: str, *, status: str = "completed") -> dict:
             "search_failures": 0 if status == "completed" else 1,
             "fallback_triggers": 1,
             "fallback_successes": 1,
+            "report_unique_urls": 3,
+            "report_cited_catalog_sources": 3,
+            "report_catalog_url_match_rate": 1.0,
+            "report_relevant_cited_sources": 2,
+            "report_cited_source_relevance_rate": 2 / 3,
+            "report_relevant_source_integrity_rate": 2 / 3,
             "metrics_complete": True,
             "warnings": [],
         },
@@ -57,9 +64,11 @@ def _metrics(run_id: str, *, status: str = "completed") -> dict:
 
 def test_question_file_has_fixed_eight_and_matches_human_document() -> None:
     schema, questions = load_questions(QUESTIONS_PATH)
-    document = (PROJECT_ROOT / "docs" / "DEMO_BENCHMARK.md").read_text(
-        encoding="utf-8"
-    ).replace("`", "")
+    document = (
+        (PROJECT_ROOT / "docs" / "DEMO_BENCHMARK.md")
+        .read_text(encoding="utf-8")
+        .replace("`", "")
+    )
 
     assert schema == "1.0"
     assert [item.id for item in questions] == [f"Q{index:02d}" for index in range(1, 9)]
@@ -69,7 +78,7 @@ def test_question_file_has_fixed_eight_and_matches_human_document() -> None:
 def test_parse_sse_supports_comments_and_multiline_data() -> None:
     lines = [
         ": keepalive",
-        "data: {\"type\":",
+        'data: {"type":',
         'data: "done"}',
         "",
     ]
@@ -109,7 +118,9 @@ def test_fake_sse_runs_all_eight_and_continues_after_failure(tmp_path: Path) -> 
                     _event(_metrics(run_id)),
                 ]
             )
-        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+        return httpx.Response(
+            200, content=body, headers={"content-type": "text/event-stream"}
+        )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     runner = BenchmarkRunner(
@@ -134,6 +145,13 @@ def test_fake_sse_runs_all_eight_and_continues_after_failure(tmp_path: Path) -> 
     assert summary["citation_unique_total"] == 21
     assert summary["citation_accessibility_rate_weighted"] is None
     assert summary["claim_citation_coverage_weighted"] == 1.0
+    assert summary["report_catalog_url_match_rate_weighted"] == 1.0
+    assert summary["report_cited_source_relevance_rate_weighted"] == pytest.approx(
+        2 / 3
+    )
+    assert summary["report_relevant_source_integrity_rate_weighted"] == pytest.approx(
+        2 / 3
+    )
     assert len(list((tmp_path / "runs").glob("*.json"))) == 8
     assert len(list((tmp_path / "reports").glob("*.md"))) == 8
     assert len((tmp_path / "summary.csv").read_text(encoding="utf-8").splitlines()) == 9
@@ -177,7 +195,9 @@ def test_timeout_requests_cancel_and_records_terminal_artifact(tmp_path: Path) -
     assert summary["failure_stage_counts"] == {"client_timeout": 1}
 
 
-def test_resume_skips_terminal_runs_and_rebuilds_identical_summary(tmp_path: Path) -> None:
+def test_resume_skips_terminal_runs_and_rebuilds_identical_summary(
+    tmp_path: Path,
+) -> None:
     _, questions = load_questions(QUESTIONS_PATH)
     calls = 0
 

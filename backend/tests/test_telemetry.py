@@ -168,6 +168,11 @@ def test_source_provenance_metrics_join_the_terminal_snapshot() -> None:
         {
             "cited_catalog_source_count": 4,
             "cited_catalog_source_rate": 0.8,
+            "report_unique_url_count": 5,
+            "report_catalog_url_match_rate": 0.8,
+            "report_relevant_cited_source_count": 3,
+            "report_cited_source_relevance_rate": 0.75,
+            "report_relevant_source_integrity_rate": 0.6,
             "uncatalogued_url_count": 1,
             "report_unknown_source_id_count": 1,
             "report_duplicate_citation_count": 4,
@@ -193,6 +198,11 @@ def test_source_provenance_metrics_join_the_terminal_snapshot() -> None:
     assert metrics["unlinked_source_ids"] == 1
     assert metrics["report_cited_catalog_sources"] == 4
     assert metrics["report_cited_catalog_source_rate"] == 0.8
+    assert metrics["report_unique_urls"] == 5
+    assert metrics["report_catalog_url_match_rate"] == 0.8
+    assert metrics["report_relevant_cited_sources"] == 3
+    assert metrics["report_cited_source_relevance_rate"] == 0.75
+    assert metrics["report_relevant_source_integrity_rate"] == 0.6
     assert metrics["report_uncatalogued_urls"] == 1
     assert metrics["report_unknown_source_ids"] == 1
     assert metrics["report_duplicate_citations"] == 4
