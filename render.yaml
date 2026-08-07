@@ -28,6 +28,8 @@ services:
         value: "true"
       - key: ENABLE_RUN_TELEMETRY
         value: "true"
+      - key: EMIT_METRICS_EVENT
+        value: "false"
       - key: PERSIST_RUN_METRICS
         value: "true"
       - key: TOKEN_USAGE_FALLBACK

@@ -47,6 +47,7 @@ class RuntimeSettings:
     daily_research_budget: int
     frontend_dist_dir: Path
     enable_run_telemetry: bool
+    emit_metrics_event: bool
     enable_inline_citation_audit: bool
     persist_run_metrics: bool
     run_metrics_dir: Path
@@ -81,6 +82,7 @@ class RuntimeSettings:
             daily_research_budget=_positive_int("DAILY_RESEARCH_BUDGET", 20),
             frontend_dist_dir=frontend_dir,
             enable_run_telemetry=_boolean("ENABLE_RUN_TELEMETRY", True),
+            emit_metrics_event=_boolean("EMIT_METRICS_EVENT", False),
             enable_inline_citation_audit=_boolean(
                 "ENABLE_INLINE_CITATION_AUDIT", False
             ),

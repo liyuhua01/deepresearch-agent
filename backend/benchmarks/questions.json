@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "questions": [
+    {
+      "id": "Q01",
+      "category": "fact_retrieval",
+      "topic": "比较 RAG 与长上下文模型在企业知识问答中的适用边界，给出 2024 年以来的公开证据。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 3
+    },
+    {
+      "id": "Q02",
+      "category": "fact_retrieval",
+      "topic": "梳理欧盟 AI Act 对通用人工智能模型提供者的主要义务与生效时间线。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 3
+    },
+    {
+      "id": "Q03",
+      "category": "fact_retrieval",
+      "topic": "比较 PostgreSQL pgvector、Milvus 和 Qdrant 在中小型语义检索系统中的工程取舍。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 3
+    },
+    {
+      "id": "Q04",
+      "category": "fact_retrieval",
+      "topic": "调研 2025 年以来浏览器端小语言模型推理的主要技术路线、性能约束和代表项目。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 3
+    },
+    {
+      "id": "Q05",
+      "category": "engineering_analysis",
+      "topic": "分析 AI Agent 任务中 SSE、WebSocket 与轮询三种进度传输方案的优缺点。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 3
+    },
+    {
+      "id": "Q06",
+      "category": "engineering_analysis",
+      "topic": "研究深度研究 Agent 中“引用存在但不支持结论”的原因，并总结可自动检测的方法。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 3
+    },
+    {
+      "id": "Q07",
+      "category": "engineering_analysis",
+      "topic": "对比 Tavily、Perplexity Search API 与自建 SearXNG 用于研究智能体时的成本、稳定性和合规风险。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 3
+    },
+    {
+      "id": "Q08",
+      "category": "engineering_analysis",
+      "topic": "设计一个面向公开演示的 LLM 应用成本防护方案，覆盖访问控制、限流、预算、日志与密钥管理。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 3
+    }
+  ]
+}

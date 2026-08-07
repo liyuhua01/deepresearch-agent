@@ -118,6 +118,35 @@ def test_streaming_api_finalizes_telemetry_without_changing_events(monkeypatch) 
     assert captured["recorder"].snapshot()["status"] == "completed"
 
 
+def test_streaming_api_can_emit_terminal_metrics_for_evaluation(monkeypatch) -> None:
+    class FakeAgent:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run_stream(self, _topic):
+            yield {"type": "final_report", "report": "# report"}
+            yield {"type": "done"}
+
+    monkeypatch.setattr(main_module, "DeepResearchAgent", FakeAgent)
+    monkeypatch.setattr(
+        main_module,
+        "_validated_config",
+        lambda _payload: Configuration(enable_notes=False),
+    )
+    monkeypatch.setattr(main_module, "_consume_research_budget", lambda _request: None)
+    with TestClient(app) as client:
+        response = client.post(
+            "/research/stream",
+            json={"topic": "测试研究主题", "job_id": "metrics_emit_job"},
+            headers={"X-Evaluation-Metrics": "1"},
+        )
+
+    assert response.status_code == 200
+    assert '"type": "metrics"' in response.text
+    assert '"status": "completed"' in response.text
+    assert "authorization" not in response.text.lower()
+
+
 def test_streaming_api_records_failure_without_changing_error_event(
     monkeypatch,
 ) -> None:

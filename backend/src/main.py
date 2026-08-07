@@ -213,7 +213,12 @@ def create_app() -> FastAPI:
         allow_origins=list(runtime_settings.cors_origins),
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Accept"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "X-Evaluation-Metrics",
+        ],
     )
 
     @app.middleware("http")
@@ -321,6 +326,9 @@ def create_app() -> FastAPI:
 
     @app.post("/research/stream")
     def stream_research(payload: ResearchRequest, request: Request) -> StreamingResponse:
+        emit_metrics = runtime_settings.emit_metrics_event or (
+            request.headers.get("x-evaluation-metrics", "").strip() == "1"
+        )
         recorder = _new_recorder(payload)
         try:
             with recorder.stage("configuration"):
@@ -343,10 +351,24 @@ def create_app() -> FastAPI:
                     event.setdefault("job_id", payload.job_id)
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 recorder.mark_completed()
+                if emit_metrics:
+                    metrics_event = {
+                        "type": "metrics",
+                        "job_id": payload.job_id,
+                        "metrics": recorder.snapshot(),
+                    }
+                    yield f"data: {json.dumps(metrics_event, ensure_ascii=False)}\n\n"
             except ResearchCancelledError:
                 recorder.mark_cancelled()
                 event = {"type": "cancelled", "job_id": payload.job_id, "message": "研究任务已取消"}
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if emit_metrics:
+                    metrics_event = {
+                        "type": "metrics",
+                        "job_id": payload.job_id,
+                        "metrics": recorder.snapshot(),
+                    }
+                    yield f"data: {json.dumps(metrics_event, ensure_ascii=False)}\n\n"
             except Exception as exc:
                 recorder.mark_failed(exc)
                 logger.exception("Streaming research job {} failed", payload.job_id)
@@ -356,6 +378,13 @@ def create_app() -> FastAPI:
                     "detail": f"研究任务执行失败：{str(exc)[:300]}",
                 }
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if emit_metrics:
+                    metrics_event = {
+                        "type": "metrics",
+                        "job_id": payload.job_id,
+                        "metrics": recorder.snapshot(),
+                    }
+                    yield f"data: {json.dumps(metrics_event, ensure_ascii=False)}\n\n"
             finally:
                 try:
                     if recorder.snapshot()["status"] == "running":
