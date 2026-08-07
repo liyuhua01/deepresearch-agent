@@ -204,6 +204,15 @@ def test_reporter_applies_better_low_duplication_revision() -> None:
     assert state.provenance_audit["report_duplicate_citation_rate"] == 0.5
 
 
+def test_reporter_does_not_retry_diverse_sources_repeated_in_reference_list() -> None:
+    class DiverseAudit:
+        report_citation_count_raw = 15
+        report_duplicate_citation_rate = 2 / 3
+        report_max_source_citation_share = 0.2
+
+    assert ReportingService._needs_quality_retry(DiverseAudit()) is False
+
+
 def test_reporter_rejects_revision_that_drops_source_diversity() -> None:
     second_source = SourceRecord(
         source_id="T1-S2",

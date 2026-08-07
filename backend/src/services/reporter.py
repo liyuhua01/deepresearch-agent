@@ -178,10 +178,8 @@ class ReportingService:
     def _needs_quality_retry(audit) -> bool:
         return bool(
             audit.report_citation_count_raw >= 6
-            and (
-                (audit.report_duplicate_citation_rate or 0) > 0.5
-                or (audit.report_max_source_citation_share or 0) > 0.35
-            )
+            and (audit.report_duplicate_citation_rate or 0) > 0.5
+            and (audit.report_max_source_citation_share or 0) > 0.35
         )
 
     @staticmethod
