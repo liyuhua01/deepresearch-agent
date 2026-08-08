@@ -10,10 +10,14 @@ import httpx
 import pytest
 
 from evaluation.benchmark import (
+    BenchmarkQuestion,
     BenchmarkRunner,
+    _validate_campaign_runs,
     build_summary,
     load_questions,
     parse_sse_lines,
+    select_question_batch,
+    select_questions,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +66,7 @@ def _metrics(run_id: str, *, status: str = "completed") -> dict:
     }
 
 
-def test_question_file_has_fixed_eight_and_matches_human_document() -> None:
+def test_question_file_has_twenty_versioned_questions_and_matches_document() -> None:
     schema, questions = load_questions(QUESTIONS_PATH)
     document = (
         (PROJECT_ROOT / "docs" / "DEMO_BENCHMARK.md")
@@ -70,9 +74,66 @@ def test_question_file_has_fixed_eight_and_matches_human_document() -> None:
         .replace("`", "")
     )
 
-    assert schema == "1.0"
-    assert [item.id for item in questions] == [f"Q{index:02d}" for index in range(1, 9)]
+    assert schema == "1.1"
+    assert [item.id for item in questions] == [
+        f"Q{index:02d}" for index in range(1, 21)
+    ]
+    assert sum("core" in item.tags for item in questions) == 8
+    assert sum("extended" in item.tags for item in questions) == 12
     assert all(item.topic in document for item in questions)
+
+
+def test_question_selection_supports_ids_categories_and_tags() -> None:
+    _, questions = load_questions(QUESTIONS_PATH)
+
+    selected = select_questions(
+        questions,
+        question_ids=["Q05", "Q08", "Q13"],
+        categories=["engineering_analysis", "robustness_safety"],
+        tags=["safety"],
+    )
+
+    assert [item.id for item in selected] == ["Q08", "Q13"]
+    with pytest.raises(ValueError, match="unknown benchmark question ids: Q99"):
+        select_questions(questions, question_ids=["Q99"])
+
+
+def test_question_batch_is_stable_and_rejects_out_of_range() -> None:
+    _, questions = load_questions(QUESTIONS_PATH)
+
+    assert [
+        item.id
+        for item in select_question_batch(questions, batch_size=5, batch_index=3)
+    ] == ["Q11", "Q12", "Q13", "Q14", "Q15"]
+    with pytest.raises(ValueError, match="available batch count 4"):
+        select_question_batch(questions, batch_size=5, batch_index=5)
+
+
+def test_loader_keeps_legacy_question_files_compatible(tmp_path: Path) -> None:
+    legacy_path = tmp_path / "legacy-questions.json"
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "questions": [
+                    {
+                        "id": "LEGACY-1",
+                        "category": "legacy",
+                        "topic": "A valid legacy benchmark question",
+                        "time_limit_seconds": 60,
+                        "minimum_unique_citations": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    schema, questions = load_questions(legacy_path)
+
+    assert schema == "1.0"
+    assert len(questions) == 1
+    assert questions[0].tags == ("legacy",)
 
 
 def test_parse_sse_supports_comments_and_multiline_data() -> None:
@@ -86,8 +147,9 @@ def test_parse_sse_supports_comments_and_multiline_data() -> None:
     assert list(parse_sse_lines(lines)) == [{"type": "done"}]
 
 
-def test_fake_sse_runs_all_eight_and_continues_after_failure(tmp_path: Path) -> None:
+def test_fake_sse_runs_core_eight_and_continues_after_failure(tmp_path: Path) -> None:
     _, questions = load_questions(QUESTIONS_PATH)
+    questions = select_questions(questions, tags=["core"])
     stream_calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -134,6 +196,9 @@ def test_fake_sse_runs_all_eight_and_continues_after_failure(tmp_path: Path) -> 
 
     assert len(stream_calls) == 8
     assert summary["run_count"] == 8
+    assert summary["expected_run_count"] == 8
+    assert summary["campaign_terminal_rate"] == 1.0
+    assert summary["campaign_status"] == "complete"
     assert summary["completed_count"] == 7
     assert summary["benchmark_success_count"] == 7
     assert summary["failure_stage_counts"] == {"search": 1}
@@ -176,7 +241,15 @@ def test_latency_percentiles_require_three_runs_for_each_question() -> None:
         for repetition in range(1, 4)
     ]
 
-    summary = build_summary(runs, {"benchmark_id": "stable"})
+    summary = build_summary(
+        runs,
+        {
+            "benchmark_id": "stable",
+            "question_ids": [f"Q{question:02d}" for question in range(1, 9)],
+            "repetitions": 3,
+            "expected_run_count": 24,
+        },
+    )
 
     assert summary["latency_sample_count"] == 24
     assert summary["latency_percentiles_status"] == "repeatable_baseline"
@@ -355,6 +428,125 @@ def test_resume_skips_terminal_runs_and_rebuilds_identical_summary(
     assert calls == 2
     assert resumed_summary == first_summary
     assert (tmp_path / "summary.json").read_bytes() == first_bytes
+
+
+def test_batches_accumulate_into_one_campaign_directory(tmp_path: Path) -> None:
+    _, all_questions = load_questions(QUESTIONS_PATH)
+    campaign = all_questions[:4]
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload["topic"])
+        report = (
+            "Claim [A](https://example.com/a), [B](https://example.org/b), "
+            "[C](https://example.net/c)."
+        )
+        return httpx.Response(
+            200,
+            content=b"".join(
+                [
+                    _event({"type": "final_report", "report": report}),
+                    _event({"type": "done"}),
+                    _event(_metrics(payload["job_id"])),
+                ]
+            ),
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    first = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=client,
+        check_accessibility=False,
+    )
+    first_summary = first.run(campaign[:2], campaign_questions=campaign)
+    first_manifest = json.loads((tmp_path / "manifest.json").read_text())
+
+    assert first_summary["run_count"] == 2
+    assert first_summary["expected_run_count"] == 4
+    assert first_summary["campaign_terminal_rate"] == 0.5
+    assert first_summary["campaign_status"] == "partial"
+    assert first_manifest["finished_at"] is None
+
+    second = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=client,
+        check_accessibility=False,
+        resume=True,
+    )
+    final_summary = second.run(campaign[2:], campaign_questions=campaign)
+    final_manifest = json.loads((tmp_path / "manifest.json").read_text())
+
+    assert len(calls) == 4
+    assert final_summary["run_count"] == 4
+    assert final_summary["campaign_terminal_rate"] == 1.0
+    assert final_summary["campaign_status"] == "complete"
+    assert final_manifest["finished_at"] is not None
+    assert final_manifest["question_ids"] == [item.id for item in campaign]
+
+
+def test_resume_rejects_changed_question_definitions(tmp_path: Path) -> None:
+    _, questions = load_questions(QUESTIONS_PATH)
+    campaign = questions[:1]
+    runner = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b"".join(
+                        [
+                            _event(
+                                {
+                                    "type": "final_report",
+                                    "report": (
+                                        "Claim [A](https://example.com/a), "
+                                        "[B](https://example.org/b), "
+                                        "[C](https://example.net/c)."
+                                    ),
+                                }
+                            ),
+                            _event({"type": "done"}),
+                            _event(_metrics("ignored-run-id")),
+                        ]
+                    ),
+                )
+            )
+        ),
+        check_accessibility=False,
+    )
+    runner.run(campaign)
+    changed = [
+        BenchmarkQuestion(
+            id=campaign[0].id,
+            category=campaign[0].category,
+            topic="changed after first batch",
+            time_limit_seconds=campaign[0].time_limit_seconds,
+            minimum_unique_citations=campaign[0].minimum_unique_citations,
+            tags=campaign[0].tags,
+        )
+    ]
+
+    resumed = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: None)),
+        check_accessibility=False,
+        resume=True,
+    )
+    with pytest.raises(ValueError, match="definitions do not match"):
+        resumed.run(changed)
+
+
+def test_campaign_rejects_foreign_terminal_artifact() -> None:
+    with pytest.raises(ValueError, match="unknown question run: Q99"):
+        _validate_campaign_runs(
+            [{"question_id": "Q99", "repetition": 1}],
+            {"question_ids": ["Q01"], "repetitions": 1},
+        )
 
 
 def test_resume_can_rerun_only_failed_artifacts(tmp_path: Path) -> None:

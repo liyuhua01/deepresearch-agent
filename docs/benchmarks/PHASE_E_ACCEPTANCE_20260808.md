@@ -13,8 +13,8 @@
 - 临时预发布容量声明提交：`f5c0c87`
 - 独立双人复核协议提交：`b5dfa43`
 - 预发布地址：`https://deepresearch-agent-phase-a-staging.onrender.com`
-- 固定题集：`backend/benchmarks/questions.json`，8 题
-- 重复次数：每题 3 次，共 24 个完整 Agent 样本
+- 版本化题集：`backend/benchmarks/questions.json`，20题；Q01–Q08 为历史兼容核心集，Q09–Q20 为扩展集
+- 原 Phase E 可重复性目标：核心8题每题3次，共24个完整 Agent 样本
 - 执行模式：串行，避免并发争抢免费部署资源并保持样本条件一致
 
 ## 已通过的工程门禁
@@ -53,7 +53,7 @@ DDGS（DuckDuckGo Search 的维护版多引擎客户端）主搜索对固定 8 �
 | 宽松语义支持率 | 双人一致判定为完全或部分支持 / 可判定样本 | `semantic-support-summary.json` | 待双人复核 |
 | 95% 置信区间 | 严格、宽松支持率的 Wilson 区间 | `semantic-support-summary.json` | 待双人复核 |
 
-## 当前容量阻塞
+## 当前容量与分批执行
 
 2026-08-08 检查预发布 `/readyz` 的实际运行配置仍为：
 
@@ -65,9 +65,9 @@ DDGS（DuckDuckGo Search 的维护版多引擎客户端）主搜索对固定 8 �
 }
 ```
 
-`render.yaml` 已声明将 `DAILY_RESEARCH_BUDGET` 和 `RATE_LIMIT_REQUESTS` 临时提高为 30，但 Render 不会仅因普通代码自动部署就同步 Blueprint（基础设施配置清单）中的环境变量。必须在 Render 控制台同步 Blueprint，或手动将两个变量改为 30 并重新部署。完成 24 次评测后应恢复为 20 和 5。
+执行器现已支持在同一 campaign（评测活动）目录内分批累计，因此无需提高公开服务限制：单轮20题可按每批5题分四个限流窗口完成；核心8题可按5题和3题分两批完成。每次启动前只预检当前批次的剩余额度，`manifest.json` 使用题目定义摘要防止不同版本题目混入同一结果。
 
-## 容量恢复后的固定执行命令
+## 当前限制内的固定执行命令
 
 不要在命令历史或文档中写入预发布密码，先通过当前终端安全设置 `BENCHMARK_ACCESS_PASSWORD`。然后执行：
 
@@ -75,11 +75,11 @@ DDGS（DuckDuckGo Search 的维护版多引擎客户端）主搜索对固定 8 �
 cd backend
 uv run python scripts/run_benchmark.py \
   --base-url https://deepresearch-agent-phase-a-staging.onrender.com \
-  --output-dir benchmarks/results/phase-e-24-20260808 \
-  --repetitions 3
+  --output-dir benchmarks/results/phase-e-core-20260808 \
+  --tag core --batch-size 5 --batch-index 1
 ```
 
-24 次完成后，第一重复轮的 Q01–Q08 同时构成固定 8 题单轮验收；整个目录构成可重复性基线。不得为追求更好结果删除失败样本。中断后只能使用同一输出目录和 `--resume` 继续。
+下一个限流窗口使用相同参数和输出目录，把 `batch-index` 改为2并增加 `--resume`。两批完成后得到核心8题单轮验收。20题扩展评测同理使用默认完整题库和四个批次。不得为追求更好结果删除失败样本。
 
 ## 双人独立语义复核
 

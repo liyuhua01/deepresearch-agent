@@ -138,7 +138,7 @@ npm run dev
 - 固定题目、指标定义和记录表：[`docs/DEMO_BENCHMARK.md`](./docs/DEMO_BENCHMARK.md)
 - 30～60 秒录屏脚本：[`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md)
 - 三个 P0 的统一评测数据链路、非回归契约与 Render 灰度部署方案：[`docs/P0_EVALUATION_CONTEXT_PACK.md`](./docs/P0_EVALUATION_CONTEXT_PACK.md)
-- 固定 8 题执行器支持多次重复、断点恢复和 JSON/CSV 汇总；少于每题 3 次、总计 24 次时，P50/P95 自动标记为 `provisional`（临时基线）。正式运行前会预检服务就绪状态、剩余日预算和单 IP 限流容量。
+- 版本化评测题库已扩展为20题：原8题保留为 `core`（核心）集合，新增12题覆盖来源冲突、证据不足、安全、时效性和跨语言研究。执行器支持按题号、类别和标签过滤，并能在同一评测目录中按每批5题断点累计 JSON/CSV 汇总；不足重复样本时 P50/P95 自动标记为 `provisional`（临时基线）。
 - `backend/scripts/run_support_audit.py` 可从批量报告分层抽样并导出结论—引用双人复核模板，计算严格/宽松语义支持率及 95% 置信区间；未完成人工标注时不会生成虚假支持率。
 - DDGS 主搜索路径的固定 8 题 × 3 次搜索级回归见 [`docs/benchmarks/DDGS_PRIMARY_24_20260807.md`](./docs/benchmarks/DDGS_PRIMARY_24_20260807.md)。
 

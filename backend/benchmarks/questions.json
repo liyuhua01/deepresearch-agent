@@ -1,9 +1,11 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
+  "suite_id": "deep-research-20-v1",
   "questions": [
     {
       "id": "Q01",
       "category": "fact_retrieval",
+      "tags": ["core", "fact", "enterprise_ai"],
       "topic": "比较 RAG 与长上下文模型在企业知识问答中的适用边界，给出 2024 年以来的公开证据。",
       "time_limit_seconds": 300,
       "minimum_unique_citations": 3
@@ -11,6 +13,7 @@
     {
       "id": "Q02",
       "category": "fact_retrieval",
+      "tags": ["core", "fact", "regulation", "freshness"],
       "topic": "梳理欧盟 AI Act 对通用人工智能模型提供者的主要义务与生效时间线。",
       "time_limit_seconds": 300,
       "minimum_unique_citations": 3
@@ -18,6 +21,7 @@
     {
       "id": "Q03",
       "category": "fact_retrieval",
+      "tags": ["core", "fact", "engineering", "comparison"],
       "topic": "比较 PostgreSQL pgvector、Milvus 和 Qdrant 在中小型语义检索系统中的工程取舍。",
       "time_limit_seconds": 300,
       "minimum_unique_citations": 3
@@ -25,6 +29,7 @@
     {
       "id": "Q04",
       "category": "fact_retrieval",
+      "tags": ["core", "fact", "freshness", "browser_ai"],
       "topic": "调研 2025 年以来浏览器端小语言模型推理的主要技术路线、性能约束和代表项目。",
       "time_limit_seconds": 300,
       "minimum_unique_citations": 3
@@ -32,6 +37,7 @@
     {
       "id": "Q05",
       "category": "engineering_analysis",
+      "tags": ["core", "engineering", "comparison", "web_protocol"],
       "topic": "分析 AI Agent 任务中 SSE、WebSocket 与轮询三种进度传输方案的优缺点。",
       "time_limit_seconds": 300,
       "minimum_unique_citations": 3
@@ -39,6 +45,7 @@
     {
       "id": "Q06",
       "category": "engineering_analysis",
+      "tags": ["core", "engineering", "citation", "quality"],
       "topic": "研究深度研究 Agent 中“引用存在但不支持结论”的原因，并总结可自动检测的方法。",
       "time_limit_seconds": 300,
       "minimum_unique_citations": 3
@@ -46,6 +53,7 @@
     {
       "id": "Q07",
       "category": "engineering_analysis",
+      "tags": ["core", "engineering", "comparison", "search_provider"],
       "topic": "对比 Tavily、Perplexity Search API 与自建 SearXNG 用于研究智能体时的成本、稳定性和合规风险。",
       "time_limit_seconds": 300,
       "minimum_unique_citations": 3
@@ -53,9 +61,106 @@
     {
       "id": "Q08",
       "category": "engineering_analysis",
+      "tags": ["core", "engineering", "safety", "cost"],
       "topic": "设计一个面向公开演示的 LLM 应用成本防护方案，覆盖访问控制、限流、预算、日志与密钥管理。",
       "time_limit_seconds": 300,
       "minimum_unique_citations": 3
+    },
+    {
+      "id": "Q09",
+      "category": "source_verification",
+      "tags": ["extended", "source_conflict", "benchmark", "primary_source"],
+      "topic": "核查不同机构对 AI 编程 Agent 基准测试成绩的报道差异，区分原始评测、厂商声明和二手解读，并说明哪些比较不能直接成立。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q10",
+      "category": "source_verification",
+      "tags": ["extended", "source_conflict", "rag", "primary_source"],
+      "topic": "核验“百万级上下文窗口已经使 RAG 过时”这一说法，分别寻找支持与反对证据，并标注证据适用条件。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q11",
+      "category": "source_verification",
+      "tags": ["extended", "insufficient_evidence", "browser_ai", "uncertainty"],
+      "topic": "评估公开证据是否足以支持“浏览器端小模型可以全面替代企业云端推理”，证据不足时必须明确指出未知项和验证方案。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q12",
+      "category": "source_verification",
+      "tags": ["extended", "standards", "web_protocol", "primary_source"],
+      "topic": "依据浏览器标准和官方文档，核验 SSE 与 WebSocket 在自动重连、双向通信、代理兼容和连接限制方面的常见说法。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q13",
+      "category": "robustness_safety",
+      "tags": ["extended", "safety", "prompt_injection", "web_research"],
+      "topic": "分析研究型 Agent 从不可信网页读取内容时可能遭遇的提示注入攻击，给出输入隔离、工具权限、来源标记和输出审查方案。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q14",
+      "category": "robustness_safety",
+      "tags": ["extended", "no_answer", "hallucination", "uncertainty"],
+      "topic": "调查是否存在名为“OpenResearch Protocol 3.0”的正式行业标准；如果找不到可靠证据，不得补造定义，并说明检索范围和不确定性。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 2
+    },
+    {
+      "id": "Q15",
+      "category": "robustness_safety",
+      "tags": ["extended", "source_conflict", "cost", "vendor_claim"],
+      "topic": "比较厂商博客与独立技术资料对长上下文和 RAG 成本的估算，识别计费口径、缓存假设和工作负载差异造成的冲突。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q16",
+      "category": "freshness_tracking",
+      "tags": ["extended", "freshness", "model_provider", "pricing"],
+      "topic": "截至评测执行日期，对比主要模型提供商公开文档中的上下文窗口、输入输出价格和缓存计费，并记录资料更新时间。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q17",
+      "category": "freshness_tracking",
+      "tags": ["extended", "freshness", "regulation", "timeline"],
+      "topic": "截至评测执行日期，核对欧盟 AI Act 中已经适用和即将适用的关键义务，优先引用欧盟官方来源并区分通过、生效与适用日期。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q18",
+      "category": "freshness_tracking",
+      "tags": ["extended", "freshness", "open_source", "agent_framework"],
+      "topic": "截至评测执行日期，比较三个主流开源 Agent 框架最近一年的发布活跃度、维护状态和可观测性能力，说明选择依据。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q19",
+      "category": "multilingual_research",
+      "tags": ["extended", "multilingual", "regulation", "primary_source"],
+      "topic": "对照欧盟官方英文与至少一种非英文版本资料，核验通用人工智能模型义务的关键术语是否存在翻译差异及其影响。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
+    },
+    {
+      "id": "Q20",
+      "category": "multilingual_research",
+      "tags": ["extended", "multilingual", "japan", "ai_governance"],
+      "topic": "结合日文官方文件与英文资料，梳理日本面向企业的 AI 治理指导原则，并区分法律义务、政府指南和行业建议。",
+      "time_limit_seconds": 300,
+      "minimum_unique_citations": 4
     }
   ]
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import json
 import math
 import os
@@ -23,6 +24,7 @@ from evaluation.accessibility import URLAccessibilityChecker
 from evaluation.citations import audit_report
 
 BENCHMARK_SCHEMA_VERSION = "1.0"
+SUPPORTED_QUESTION_SCHEMA_VERSIONS = {"1.0", "1.1"}
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "timeout", "incomplete"}
 
 
@@ -35,37 +37,103 @@ class BenchmarkQuestion:
     topic: str
     time_limit_seconds: int
     minimum_unique_citations: int
+    tags: tuple[str, ...] = ()
 
 
 def load_questions(path: Path) -> tuple[str, list[BenchmarkQuestion]]:
     """Load and strictly validate the machine-readable question authority."""
     payload = json.loads(path.read_text(encoding="utf-8"))
     schema_version = str(payload.get("schema_version") or "")
-    if schema_version != BENCHMARK_SCHEMA_VERSION:
+    if schema_version not in SUPPORTED_QUESTION_SCHEMA_VERSIONS:
         raise ValueError(f"unsupported question schema: {schema_version!r}")
     raw_questions = payload.get("questions")
-    if not isinstance(raw_questions, list) or len(raw_questions) != 8:
-        raise ValueError("fixed benchmark must contain exactly 8 questions")
+    if not isinstance(raw_questions, list) or not raw_questions:
+        raise ValueError("benchmark question suite must contain at least one question")
 
     questions: list[BenchmarkQuestion] = []
     seen: set[str] = set()
     for item in raw_questions:
+        category = str(item["category"]).strip()
+        raw_tags = item.get("tags")
+        if raw_tags is None and schema_version == "1.0":
+            raw_tags = [category]
+        if not isinstance(raw_tags, list):
+            raise ValueError(f"invalid tags for question: {item.get('id')}")
+        tags = tuple(
+            dict.fromkeys(str(tag).strip() for tag in raw_tags if str(tag).strip())
+        )
         question = BenchmarkQuestion(
             id=str(item["id"]).strip(),
-            category=str(item["category"]).strip(),
+            category=category,
             topic=str(item["topic"]).strip(),
             time_limit_seconds=int(item["time_limit_seconds"]),
             minimum_unique_citations=int(item["minimum_unique_citations"]),
+            tags=tags,
         )
         if not question.id or question.id in seen:
             raise ValueError(f"duplicate or empty question id: {question.id!r}")
-        if not question.topic or question.time_limit_seconds <= 0:
+        if (
+            not question.category
+            or not question.topic
+            or question.time_limit_seconds <= 0
+        ):
             raise ValueError(f"invalid question: {question.id}")
         if question.minimum_unique_citations < 0:
             raise ValueError(f"invalid citation threshold: {question.id}")
+        if schema_version == "1.1" and not question.tags:
+            raise ValueError(f"question tags must not be empty: {question.id}")
         seen.add(question.id)
         questions.append(question)
     return schema_version, questions
+
+
+def select_questions(
+    questions: Iterable[BenchmarkQuestion],
+    *,
+    question_ids: Iterable[str] = (),
+    categories: Iterable[str] = (),
+    tags: Iterable[str] = (),
+) -> list[BenchmarkQuestion]:
+    """Filter a suite with OR inside each dimension and AND across dimensions."""
+    available = list(questions)
+    requested_ids = {item.strip() for item in question_ids if item.strip()}
+    requested_categories = {item.strip() for item in categories if item.strip()}
+    requested_tags = {item.strip() for item in tags if item.strip()}
+    known_ids = {item.id for item in available}
+    unknown_ids = sorted(requested_ids - known_ids)
+    if unknown_ids:
+        raise ValueError(f"unknown benchmark question ids: {', '.join(unknown_ids)}")
+
+    selected = [
+        item
+        for item in available
+        if (not requested_ids or item.id in requested_ids)
+        and (not requested_categories or item.category in requested_categories)
+        and (not requested_tags or bool(requested_tags.intersection(item.tags)))
+    ]
+    if not selected:
+        raise ValueError("benchmark filters selected no questions")
+    return selected
+
+
+def select_question_batch(
+    questions: Iterable[BenchmarkQuestion],
+    *,
+    batch_size: int,
+    batch_index: int,
+) -> list[BenchmarkQuestion]:
+    """Select one stable 1-based batch without changing suite order."""
+    selected = list(questions)
+    if batch_size <= 0 or batch_index <= 0:
+        raise ValueError("batch_size and batch_index must be positive")
+    start = (batch_index - 1) * batch_size
+    batch = selected[start : start + batch_size]
+    if not batch:
+        batch_count = math.ceil(len(selected) / batch_size)
+        raise ValueError(
+            f"batch_index {batch_index} exceeds available batch count {batch_count}"
+        )
+    return batch
 
 
 class BenchmarkRunner:
@@ -171,11 +239,28 @@ class BenchmarkRunner:
                 pending += 1
         return pending
 
-    def run(self, questions: Iterable[BenchmarkQuestion]) -> dict[str, Any]:
-        """Run all requested questions and always rebuild aggregate outputs."""
+    def run(
+        self,
+        questions: Iterable[BenchmarkQuestion],
+        *,
+        campaign_questions: Iterable[BenchmarkQuestion] | None = None,
+    ) -> dict[str, Any]:
+        """Run one batch and rebuild aggregates for the full campaign directory."""
         selected = list(questions)
+        authority = (
+            list(campaign_questions) if campaign_questions is not None else selected
+        )
+        authority_ids = {item.id for item in authority}
+        if (
+            not selected
+            or not authority
+            or any(item.id not in authority_ids for item in selected)
+        ):
+            raise ValueError(
+                "run batch must be a non-empty subset of campaign questions"
+            )
         self._prepare_directories()
-        manifest = self._load_or_create_manifest(selected)
+        manifest = self._load_or_create_manifest(authority)
 
         for question in selected:
             for repetition in range(1, self.repetitions + 1):
@@ -194,6 +279,7 @@ class BenchmarkRunner:
                 _atomic_json_write(run_path, result)
 
         runs = self._load_runs()
+        _validate_campaign_runs(runs, manifest)
         observed_models = sorted(
             {str(item["model"]) for item in runs if item.get("model")}
         )
@@ -207,7 +293,11 @@ class BenchmarkRunner:
         summary = build_summary(runs, manifest)
         _atomic_json_write(self.output_dir / "summary.json", summary)
         write_summary_csv(self.output_dir / "summary.csv", runs)
-        manifest["finished_at"] = _utc_now()
+        expected_run_count = int(manifest["expected_run_count"])
+        manifest["last_updated_at"] = _utc_now()
+        manifest["finished_at"] = (
+            manifest["last_updated_at"] if len(runs) >= expected_run_count else None
+        )
         manifest["run_count"] = len(runs)
         _atomic_json_write(self.output_dir / "manifest.json", manifest)
         return summary
@@ -312,6 +402,7 @@ class BenchmarkRunner:
             "run_id": run_id,
             "question_id": question.id,
             "category": question.category,
+            "question_tags": list(question.tags),
             "topic": question.topic,
             "repetition": repetition,
             "git_commit": (server_metrics or {}).get("git_commit") or self.git_commit,
@@ -414,18 +505,32 @@ class BenchmarkRunner:
         self, questions: list[BenchmarkQuestion]
     ) -> dict[str, Any]:
         path = self.output_dir / "manifest.json"
-        if self.resume and path.exists():
+        if self.resume and not path.exists():
+            raise FileNotFoundError(
+                "resume requested but benchmark manifest is missing"
+            )
+        if self.resume:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if payload.get("question_ids") != [item.id for item in questions]:
                 raise ValueError("resume question set does not match manifest")
+            if payload.get("question_suite_digest") != _question_suite_digest(
+                questions
+            ):
+                raise ValueError("resume question definitions do not match manifest")
             if int(payload.get("repetitions", 0)) != self.repetitions:
                 raise ValueError("resume repetitions do not match manifest")
             return payload
+        if path.exists():
+            raise FileExistsError(
+                "benchmark output already contains a manifest; use resume explicitly"
+            )
+        expected_run_count = len(questions) * self.repetitions
         return {
             "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
             "benchmark_id": datetime.now(timezone.utc).strftime("bench-%Y%m%dT%H%M%SZ"),
             "started_at": _utc_now(),
             "finished_at": None,
+            "last_updated_at": None,
             "base_url": self.base_url,
             "git_commit": self.git_commit,
             "model": self.model,
@@ -436,7 +541,10 @@ class BenchmarkRunner:
             "source_provenance_enabled": self.enable_source_provenance,
             "accessibility_check_enabled": self.check_accessibility,
             "question_ids": [item.id for item in questions],
+            "question_count": len(questions),
+            "question_suite_digest": _question_suite_digest(questions),
             "repetitions": self.repetitions,
+            "expected_run_count": expected_run_count,
             "run_ids": {},
         }
 
@@ -477,10 +585,23 @@ def build_summary(
     repetitions_by_question = Counter(
         str(item.get("question_id")) for item in completed if item.get("question_id")
     )
+    expected_question_ids = {
+        str(item) for item in manifest.get("question_ids") or () if str(item)
+    }
+    expected_repetitions = max(1, int(manifest.get("repetitions") or 1))
+    expected_run_count = int(
+        manifest.get("expected_run_count")
+        or len(expected_question_ids) * expected_repetitions
+        or len(runs)
+    )
     latency_repeatable = bool(
-        len(durations) >= 24
-        and len(repetitions_by_question) == 8
-        and min(repetitions_by_question.values(), default=0) >= 3
+        len(expected_question_ids) >= 8
+        and expected_repetitions >= 3
+        and len(durations) >= len(expected_question_ids) * expected_repetitions
+        and all(
+            repetitions_by_question.get(question_id, 0) >= expected_repetitions
+            for question_id in expected_question_ids
+        )
     )
     coverages = [_number(item.get("claim_citation_coverage")) for item in completed]
     coverages = [item for item in coverages if item is not None]
@@ -521,7 +642,12 @@ def build_summary(
         "git_commit": manifest.get("git_commit"),
         "model": manifest.get("model"),
         "search_api": manifest.get("search_api"),
+        "expected_run_count": expected_run_count,
         "run_count": len(runs),
+        "campaign_terminal_rate": _rate(len(runs), expected_run_count),
+        "campaign_status": (
+            "complete" if len(runs) >= expected_run_count else "partial"
+        ),
         "completed_count": len(completed),
         "failed_count": len(runs) - len(completed),
         "benchmark_success_count": len(successful),
@@ -622,6 +748,7 @@ CSV_FIELDS = (
     "run_id",
     "question_id",
     "category",
+    "question_tags",
     "repetition",
     "status",
     "benchmark_success",
@@ -681,7 +808,10 @@ def write_summary_csv(path: Path, runs: list[dict[str, Any]]) -> None:
             )
             writer.writeheader()
             for item in runs:
-                writer.writerow({key: item.get(key) for key in CSV_FIELDS})
+                row = {key: item.get(key) for key in CSV_FIELDS}
+                if isinstance(row.get("question_tags"), list):
+                    row["question_tags"] = "|".join(row["question_tags"])
+                writer.writerow(row)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
@@ -704,6 +834,46 @@ def resolve_git_commit() -> str | None:
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def _question_suite_digest(questions: Iterable[BenchmarkQuestion]) -> str:
+    """Hash immutable question definitions to make resume fail closed."""
+    canonical = [asdict(item) for item in questions]
+    rendered = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _validate_campaign_runs(
+    runs: Iterable[dict[str, Any]], manifest: dict[str, Any]
+) -> None:
+    """Reject foreign or duplicate terminal artifacts before aggregation."""
+    allowed_ids = {str(item) for item in manifest.get("question_ids") or ()}
+    repetitions = int(manifest.get("repetitions") or 0)
+    seen: set[tuple[str, int]] = set()
+    for run in runs:
+        question_id = str(run.get("question_id") or "")
+        try:
+            repetition = int(run.get("repetition"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("campaign run has an invalid repetition") from exc
+        key = (question_id, repetition)
+        if question_id not in allowed_ids:
+            raise ValueError(f"campaign contains unknown question run: {question_id}")
+        if repetition < 1 or repetition > repetitions:
+            raise ValueError(
+                f"campaign run repetition is out of range: {question_id}/{repetition}"
+            )
+        if key in seen:
+            raise ValueError(
+                f"campaign contains duplicate question repetition: "
+                f"{question_id}/{repetition}"
+            )
+        seen.add(key)
 
 
 def _copy_server_metrics(
