@@ -299,6 +299,34 @@ def test_preflight_returns_ready_payload_when_capacity_is_sufficient(
     assert runner.preflight_capacity(24) == expected
 
 
+def test_preflight_allows_render_cold_start_window(tmp_path: Path) -> None:
+    class RecordingClient:
+        timeout: float | None = None
+
+        def get(self, url: str, *, timeout: float) -> httpx.Response:
+            del url
+            self.timeout = timeout
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ready",
+                    "errors": [],
+                    "budget": {"used": 0, "limit": 20, "remaining": 20},
+                },
+            )
+
+    client = RecordingClient()
+    runner = BenchmarkRunner(
+        base_url="https://benchmark.test",
+        output_dir=tmp_path,
+        client=client,  # type: ignore[arg-type]
+    )
+
+    runner.preflight_capacity(5)
+
+    assert client.timeout == 60
+
+
 def test_preflight_rejects_per_client_limit(tmp_path: Path) -> None:
     payload = {
         "status": "ready",

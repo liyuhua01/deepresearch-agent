@@ -24,6 +24,7 @@ from evaluation.accessibility import URLAccessibilityChecker
 from evaluation.citations import audit_report
 
 BENCHMARK_SCHEMA_VERSION = "1.0"
+PREFLIGHT_TIMEOUT_SECONDS = 60
 SUPPORTED_QUESTION_SCHEMA_VERSIONS = {"1.0", "1.1"}
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "timeout", "incomplete"}
 
@@ -190,7 +191,10 @@ class BenchmarkRunner:
         if required_runs <= 0:
             raise ValueError("required_runs must be positive")
         try:
-            response = self.client.get(f"{self.base_url}/readyz", timeout=20)
+            response = self.client.get(
+                f"{self.base_url}/readyz",
+                timeout=PREFLIGHT_TIMEOUT_SECONDS,
+            )
         except httpx.HTTPError as exc:
             raise RuntimeError(
                 f"benchmark preflight could not reach /readyz: {type(exc).__name__}"
