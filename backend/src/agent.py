@@ -161,12 +161,19 @@ class DeepResearchAgent:
         state = SummaryState(research_topic=topic)
         with self.recorder.stage("planning"):
             state.todo_items = self.planner.plan_todo_list(state)
+            if not state.todo_items:
+                state.todo_items = self.planner.recover_tasks_from_tool_events(
+                    state, self._tool_tracker.as_dicts()
+                )
+                if state.todo_items:
+                    self.recorder.add_warning("planner_tasks_recovered_from_note_tools")
         self._raise_if_cancelled()
         self._drain_tool_events(state)
 
         if not state.todo_items:
             logger.info("No TODO items generated; falling back to single task")
             state.todo_items = [self.planner.create_fallback_task(state)]
+            self.recorder.add_warning("planner_fallback_single_task")
         self.recorder.record_tasks_planned(len(state.todo_items))
 
         for task in state.todo_items:
@@ -207,11 +214,18 @@ class DeepResearchAgent:
 
         with self.recorder.stage("planning"):
             state.todo_items = self.planner.plan_todo_list(state)
+            if not state.todo_items:
+                state.todo_items = self.planner.recover_tasks_from_tool_events(
+                    state, self._tool_tracker.as_dicts()
+                )
+                if state.todo_items:
+                    self.recorder.add_warning("planner_tasks_recovered_from_note_tools")
         self._raise_if_cancelled()
         for event in self._drain_tool_events(state, step=0):
             yield event
         if not state.todo_items:
             state.todo_items = [self.planner.create_fallback_task(state)]
+            self.recorder.add_warning("planner_fallback_single_task")
         self.recorder.record_tasks_planned(len(state.todo_items))
 
         channel_map: dict[int, dict[str, Any]] = {}

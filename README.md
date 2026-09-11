@@ -85,20 +85,28 @@ docker run --rm -p 8000:10000 \
 
 ### 前后端开发模式
 
+安装依赖后，可在项目根目录用一个命令同时启动前后端：
+
+```bash
+./scripts/dev.sh
+```
+
+前端地址为 `http://localhost:5174`，后端地址为 `http://localhost:8000`。
+后端会自动读取 `backend/.env`；前端开发环境默认连接本机 8000 端口，通常无需创建
+`frontend/.env.local`。
+
+首次安装依赖：
+
 ```bash
 cd backend
 cp .env.example .env
 uv sync
-uv run python src/main.py
-```
-
-另开终端：
-
-```bash
-cd frontend
+cd ../frontend
 npm ci
-npm run dev
 ```
+
+如需分别调试，也可以在两个终端中运行 `backend/.venv/bin/python backend/src/main.py`
+和 `npm --prefix frontend run dev`。
 
 ## 环境变量
 

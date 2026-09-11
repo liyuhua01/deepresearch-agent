@@ -31,7 +31,7 @@ from utils import (
 
 logger = logging.getLogger(__name__)
 
-MAX_TOKENS_PER_SOURCE = 2000
+MAX_TOKENS_PER_SOURCE = 1200
 MAX_PAGE_BYTES = 262_144
 MAX_PAGE_REDIRECTS = 3
 _GLOBAL_SEARCH_TOOL = SearchTool(backend="hybrid")
@@ -42,6 +42,13 @@ _OFFICIAL_SITE_HINTS = (
     ),
     ({"kubernetes", "k8s"}, "kubernetes.io"),
     ({"javascript", "typescript", "web api"}, "developer.mozilla.org"),
+    (
+        {"server-sent events", "eventsource", "websocket", "sse"},
+        "developer.mozilla.org",
+    ),
+    ({"eu ai act", "ai act", "artificial intelligence act", "欧盟 ai act"}, "europa.eu"),
+    ({"postgresql", "pgvector"}, "postgresql.org"),
+    ({"deepseek"}, "api-docs.deepseek.com"),
     ({"openai", "chatgpt"}, "openai.com"),
 )
 
@@ -351,6 +358,14 @@ def dispatch_search(
             loop_count=loop_count,
             recorder=recorder,
         )
+    elif payload.get("results"):
+        # Even with provenance disabled, remove obvious unrelated search noise
+        # and diversify domains before sending evidence to the summarizer.
+        payload = rank_search_results(
+            payload,
+            relevance_text=query,
+            max_results=5,
+        )
 
     notices = list(payload.get("notices") or [])
 
@@ -396,17 +411,28 @@ def _enhance_provenance_search(
     if recorder:
         recorder.record_search_attempt()
     try:
-        supplemental = _GLOBAL_SEARCH_TOOL.run(
-            {
-                "input": supplemental_query,
-                "backend": search_api,
-                "mode": "structured",
-                "fetch_full_page": config.fetch_full_page,
-                "max_results": 5,
-                "max_tokens_per_source": MAX_TOKENS_PER_SOURCE,
-                "loop_count": loop_count,
-            }
-        )
+        if search_api == "duckduckgo":
+            supplemental = _ddgs_multi_engine_search(
+                supplemental_query,
+                max_results=5,
+            )
+            if config.fetch_full_page:
+                supplemental = _enrich_ddgs_full_pages(
+                    supplemental,
+                    max_tokens_per_source=MAX_TOKENS_PER_SOURCE,
+                )
+        else:
+            supplemental = _GLOBAL_SEARCH_TOOL.run(
+                {
+                    "input": supplemental_query,
+                    "backend": search_api,
+                    "mode": "structured",
+                    "fetch_full_page": config.fetch_full_page,
+                    "max_results": 5,
+                    "max_tokens_per_source": MAX_TOKENS_PER_SOURCE,
+                    "loop_count": loop_count,
+                }
+            )
         if isinstance(supplemental, dict):
             supplemental_results = list(supplemental.get("results") or [])
         if recorder:
@@ -457,13 +483,27 @@ def _enhance_provenance_search(
                 recorder.record_search_failure()
             notices.append("多引擎官方域名检索失败，已保留可用的原始来源。")
 
+    authoritative_seeds = _authoritative_seed_results(query)
+    if authoritative_seeds and config.fetch_full_page:
+        authoritative_seeds = list(
+            _enrich_ddgs_full_pages(
+                {"results": authoritative_seeds, "notices": []},
+                max_tokens_per_source=MAX_TOKENS_PER_SOURCE,
+            ).get("results")
+            or []
+        )
+
     merged = dict(payload)
-    merged["results"] = list(payload.get("results") or []) + supplemental_results
+    merged["results"] = (
+        authoritative_seeds
+        + list(payload.get("results") or [])
+        + supplemental_results
+    )
     merged["notices"] = notices
     ranked = rank_search_results(
         merged,
         relevance_text=query,
-        max_results=8,
+        max_results=6,
         require_relevance=expected_official_domain is not None,
     )
     ranked.setdefault("notices", []).append(
@@ -487,6 +527,26 @@ def _official_domain_for_query(query: str) -> str | None:
         if any(keyword in lowered for keyword in keywords):
             return domain
     return None
+
+
+def _authoritative_seed_results(query: str) -> list[dict[str, str]]:
+    """Route known regulated topics to canonical public primary sources."""
+    if _official_domain_for_query(query) != "europa.eu":
+        return []
+    return [
+        {
+            "title": "Regulation (EU) 2024/1689 — Artificial Intelligence Act",
+            "url": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj",
+            "content": "Official Journal text of the European Union AI Act.",
+            "raw_content": "Official Journal text of the European Union AI Act.",
+        },
+        {
+            "title": "European Commission — AI Act regulatory framework",
+            "url": "https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai",
+            "content": "European Commission overview and implementation timeline.",
+            "raw_content": "European Commission overview and implementation timeline.",
+        },
+    ]
 
 
 def _contains_domain(results: list[dict[str, Any]], expected_domain: str) -> bool:

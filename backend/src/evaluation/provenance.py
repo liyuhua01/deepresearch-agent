@@ -477,13 +477,14 @@ def rank_search_results(
             continue
         seen.add(normalized)
         title = str(item.get("title") or normalized)
+        evidence_text = str(item.get("content") or item.get("raw_content") or "")
         relevance_status, _ = _assess_source_relevance(
             relevance_text,
-            f"{title} {normalized}",
+            f"{title} {normalized} {evidence_text}",
         )
         domain = urlsplit(normalized).hostname or ""
         source_type = classify_domain(domain, normalized)
-        has_content = bool(str(item.get("content") or item.get("raw_content") or ""))
+        has_content = bool(evidence_text)
         score = _source_quality_score(source_type, relevance_status, has_content)
         ranked.append((score, index, domain, dict(item)))
 

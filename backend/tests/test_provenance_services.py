@@ -160,6 +160,62 @@ def test_reporter_expands_tokens_and_records_final_provenance_audit() -> None:
     assert state.provenance_audit["report_catalog_url_match_rate"] == 1.0
 
 
+def test_reporter_recovers_from_fence_only_generation() -> None:
+    recovered = (
+        "# 并发研究报告\n\n## 执行摘要\n"
+        "asyncio 适合网络等待 [T1-S1]。\n\n## 参考来源\n- [T1-S1]"
+    )
+    agent = SequencedAgent(["``", recovered])
+    service = ReportingService(
+        agent,
+        Configuration(enable_notes=False, enable_source_provenance=True),
+    )
+    task = TodoItem(
+        id=1,
+        title="并发",
+        intent="比较",
+        query="asyncio",
+        status="completed",
+        summary="asyncio 适合网络等待 [T1-S1]。",
+        sources_summary="Python 官方文档",
+    )
+    task.source_records = [_source()]
+    state = SummaryState(research_topic="并发", todo_items=[task])
+
+    report = service.generate_report(state)
+
+    assert report.startswith("# 并发研究报告")
+    assert len(agent.prompts) == 2
+    assert "禁止调用任何工具" in agent.prompts[1]
+    assert state.provenance_audit["report_generation_retry_attempted"] is True
+    assert state.provenance_audit["report_generation_retry_applied"] is True
+    assert state.provenance_audit["report_generation_fallback_applied"] is False
+
+
+def test_reporter_falls_back_to_completed_task_summaries() -> None:
+    agent = SequencedAgent(["```", "{}"])
+    service = ReportingService(
+        agent,
+        Configuration(enable_notes=False, enable_source_provenance=True),
+    )
+    task = TodoItem(
+        id=1,
+        title="不存在的标准",
+        intent="核验",
+        query="不存在的标准",
+        status="completed",
+        summary="未找到足以证明该标准存在的权威证据。",
+        sources_summary="暂无权威来源。",
+    )
+    state = SummaryState(research_topic="标准核验", todo_items=[task])
+
+    report = service.generate_report(state)
+
+    assert "未找到足以证明该标准存在的权威证据" in report
+    assert len(report) > 100
+    assert state.provenance_audit["report_generation_fallback_applied"] is True
+
+
 def test_reporter_applies_better_low_duplication_revision() -> None:
     repeated = (
         "## 核心洞见\n"

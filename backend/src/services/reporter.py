@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 
 from hello_agents import ToolAwareSimpleAgent
@@ -114,10 +115,27 @@ class ReportingService:
 
         response = self._agent.run(prompt)
         report_text = self._clean_report(response)
+        generation_retry_attempted = False
+        generation_retry_applied = False
+        generation_fallback_applied = False
+        if not self._is_substantive_report(report_text):
+            generation_retry_attempted = True
+            try:
+                recovered = self._clean_report(
+                    self._agent.run(self._build_report_only_prompt(state, all_sources))
+                )
+                if self._is_substantive_report(recovered):
+                    report_text = recovered
+                    generation_retry_applied = True
+            except Exception:
+                generation_retry_applied = False
+        if not self._is_substantive_report(report_text):
+            report_text = self._build_summary_fallback(state)
+            generation_fallback_applied = True
 
         if not self._config.enable_source_provenance:
             self._agent.clear_history()
-            return report_text or "报告生成失败，请检查输入。"
+            return report_text
 
         report_text = collapse_adjacent_duplicate_citations(
             render_numbered_citations(
@@ -162,8 +180,17 @@ class ReportingService:
         state.provenance_audit = asdict(audit)
         state.provenance_audit["report_quality_retry_attempted"] = retry_attempted
         state.provenance_audit["report_quality_retry_applied"] = retry_applied
+        state.provenance_audit["report_generation_retry_attempted"] = (
+            generation_retry_attempted
+        )
+        state.provenance_audit["report_generation_retry_applied"] = (
+            generation_retry_applied
+        )
+        state.provenance_audit["report_generation_fallback_applied"] = (
+            generation_fallback_applied
+        )
 
-        return report_text or "报告生成失败，请检查输入。"
+        return report_text
 
     def _clean_report(self, text: str) -> str:
         cleaned = text.strip()
@@ -173,6 +200,57 @@ class ReportingService:
             cleaned,
             include_dsml=self._config.enable_source_provenance,
         ).strip()
+
+    @staticmethod
+    def _is_substantive_report(text: str) -> bool:
+        """Reject empty fences/tool residue while allowing concise valid reports."""
+        meaningful = re.findall(r"[A-Za-z0-9\u3400-\u9fff]", text)
+        return len(meaningful) >= 8
+
+    @staticmethod
+    def _build_report_only_prompt(state: SummaryState, sources: list) -> str:
+        source_lines = "\n".join(
+            f"- [{source.source_id}]({source.normalized_url}) {source.title}"
+            for source in sources
+        )
+        return (
+            "笔记读取已经完成。上一条回复没有形成有效报告。现在禁止调用任何工具，"
+            "不要输出 JSON、DSML、代码围栏或过程说明；只输出完整 Markdown 研究报告。"
+            "报告至少包含：执行摘要、分主题发现、证据不足与风险、结论、参考来源。"
+            "只能使用下列来源编号及其对应 URL；证据不足的事实必须标注‘待验证’。\n"
+            f"研究主题：{state.research_topic}\n来源目录：\n{source_lines or '- 暂无来源'}"
+        )
+
+    @staticmethod
+    def _build_summary_fallback(state: SummaryState) -> str:
+        """Produce a useful deterministic report when the model emits no report."""
+        sections = [
+            f"# {state.research_topic}",
+            "",
+            "## 执行摘要",
+            "最终整合步骤未返回有效正文。以下内容由已完成的分项研究结果自动整理；"
+            "未被现有来源直接支持的结论均应视为待验证。",
+        ]
+        for task in state.todo_items:
+            sections.extend(
+                [
+                    "",
+                    f"## {task.title}",
+                    task.summary or "暂无可用信息。",
+                    "",
+                    "### 本项来源",
+                    task.sources_summary or "暂无来源。",
+                ]
+            )
+        sections.extend(
+            [
+                "",
+                "## 结论与限制",
+                "本报告保留各分项研究的原始证据边界。对于缺少权威来源、时间信息"
+                "或交叉验证的内容，应在采取行动前继续核实。",
+            ]
+        )
+        return "\n".join(sections).strip()
 
     @staticmethod
     def _needs_quality_retry(audit) -> bool:

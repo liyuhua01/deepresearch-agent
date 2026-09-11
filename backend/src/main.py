@@ -13,6 +13,7 @@ from threading import Event, Lock
 from typing import Any, Dict, Iterator, Optional
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -32,6 +33,10 @@ from runtime import (
     RuntimeSettings,
     research_configuration_errors,
 )
+
+# Local development follows the documented `python src/main.py` command.
+# Deployed environments keep precedence because override=False.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 logger.remove()
 logger.add(

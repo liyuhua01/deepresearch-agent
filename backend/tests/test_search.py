@@ -223,10 +223,9 @@ def test_empty_ddgs_primary_uses_legacy_adapter_fallback(monkeypatch) -> None:
 
 def test_provenance_search_adds_and_prioritizes_official_sources(monkeypatch) -> None:
     recorder = RunRecorder(run_id="quality_search", topic="asyncio")
-    monkeypatch.setattr(
-        search,
-        "_ddgs_multi_engine_search",
-        lambda _query, *, max_results: {
+    ddgs_results = iter(
+        [
+            {
             "results": [
                 {
                     "title": "Asyncio community comparison",
@@ -242,12 +241,8 @@ def test_provenance_search_adds_and_prioritizes_official_sources(monkeypatch) ->
             "backend": "ddgs-auto",
             "answer": None,
             "notices": [],
-        },
-    )
-    monkeypatch.setattr(
-        search._GLOBAL_SEARCH_TOOL,
-        "run",
-        lambda _params: {
+            },
+            {
             "results": [
                 {
                     "title": "asyncio — Asynchronous I/O",
@@ -258,7 +253,13 @@ def test_provenance_search_adds_and_prioritizes_official_sources(monkeypatch) ->
             "backend": "duckduckgo",
             "answer": None,
             "notices": [],
-        },
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        search,
+        "_ddgs_multi_engine_search",
+        lambda _query, *, max_results: next(ddgs_results),
     )
 
     payload, notices, _, _ = search.dispatch_search(
@@ -284,10 +285,14 @@ def test_provenance_search_adds_and_prioritizes_official_sources(monkeypatch) ->
 
 
 def test_provenance_supplement_failure_keeps_primary_results(monkeypatch) -> None:
-    monkeypatch.setattr(
-        search,
-        "_ddgs_multi_engine_search",
-        lambda _query, *, max_results: {
+    call_count = 0
+
+    def ddgs(_query, *, max_results):
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise RuntimeError("supplement unavailable")
+        return {
             "results": [
                 {
                     "title": "Primary asyncio result",
@@ -298,12 +303,12 @@ def test_provenance_supplement_failure_keeps_primary_results(monkeypatch) -> Non
             "backend": "duckduckgo",
             "answer": None,
             "notices": [],
-        },
-    )
+        }
+
     monkeypatch.setattr(
-        search._GLOBAL_SEARCH_TOOL,
-        "run",
-        lambda _params: (_ for _ in ()).throw(RuntimeError("supplement unavailable")),
+        search,
+        "_ddgs_multi_engine_search",
+        ddgs,
     )
 
     payload, notices, _, _ = search.dispatch_search(
@@ -329,6 +334,58 @@ def test_authoritative_query_uses_known_official_technical_domain() -> None:
     )
 
     assert query.startswith("site:docs.python.org ")
+
+
+def test_authoritative_query_targets_mdn_for_sse_and_websocket() -> None:
+    query = search._build_authoritative_query("SSE 与 WebSocket 自动重连")
+
+    assert query.startswith("site:developer.mozilla.org ")
+
+
+def test_ai_act_subquery_targets_eu_and_seeds_canonical_sources() -> None:
+    query = "AI Act 高风险系统适用时间线"
+
+    assert search._build_authoritative_query(query).startswith("site:europa.eu ")
+    seeds = search._authoritative_seed_results(query)
+    assert [item["url"] for item in seeds] == [
+        "https://eur-lex.europa.eu/eli/reg/2024/1689/oj",
+        "https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai",
+    ]
+
+
+def test_normal_search_filters_unrelated_portal_noise(monkeypatch) -> None:
+    monkeypatch.setattr(
+        search,
+        "_ddgs_multi_engine_search",
+        lambda _query, *, max_results: {
+            "results": [
+                {
+                    "title": "Using server-sent events",
+                    "url": "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events",
+                    "content": "SSE EventSource reconnect behavior",
+                },
+                {
+                    "title": "Video homepage",
+                    "url": "https://youtube.com/",
+                    "content": "videos",
+                },
+            ],
+            "backend": "ddgs-auto",
+            "answer": None,
+            "notices": [],
+        },
+    )
+
+    payload, _, _, _ = search.dispatch_search(
+        "SSE EventSource reconnect behavior",
+        Configuration(search_api=SearchAPI.DUCKDUCKGO, fetch_full_page=False),
+        loop_count=0,
+    )
+
+    assert payload is not None
+    assert [item["title"] for item in payload["results"]] == [
+        "Using server-sent events"
+    ]
 
 
 def test_provenance_retries_when_provider_ignores_official_domain(monkeypatch) -> None:
@@ -382,4 +439,4 @@ def test_provenance_retries_when_provider_ignores_official_domain(monkeypatch) -
         "https://docs.python.org/3/library/asyncio.html",
         "https://example.com/asyncio",
     ]
-    assert any("受限多引擎" in notice for notice in notices)
+    assert not any("多引擎检索仍未返回" in notice for notice in notices)

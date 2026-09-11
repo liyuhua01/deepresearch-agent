@@ -99,6 +99,14 @@ def test_streaming_output_chunks_are_unchanged_and_final_usage_is_recorded(
 
 
 def test_estimated_fallback_is_explicit(monkeypatch) -> None:
+    class FakeEncoding:
+        @staticmethod
+        def encode(text: str) -> list[str]:
+            return list(text)
+
+    monkeypatch.setattr(
+        "tiktoken.encoding_for_model", lambda _model: FakeEncoding()
+    )
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="估算输出"))],
         usage=None,

@@ -77,6 +77,43 @@ class PlanningService:
             query=f"{state.research_topic} 最新进展" if state.research_topic else "基础背景梳理",
         )
 
+    @staticmethod
+    def recover_tasks_from_tool_events(
+        state: SummaryState, events: list[dict[str, Any]]
+    ) -> list[TodoItem]:
+        """Recover planner tasks already persisted through the note tool."""
+
+        recovered: dict[int, TodoItem] = {}
+        for event in events:
+            if event.get("agent") != "研究规划专家" or event.get("tool") != "note":
+                continue
+            parameters = event.get("parsed_parameters")
+            if not isinstance(parameters, dict) or parameters.get("action") != "create":
+                continue
+            try:
+                task_id = int(parameters.get("task_id"))
+            except (TypeError, ValueError):
+                continue
+            if task_id < 1 or task_id > 5 or task_id in recovered:
+                continue
+
+            raw_title = str(parameters.get("title") or f"任务 {task_id}").strip()
+            title = re.sub(rf"^任务\s*{task_id}\s*[:：-]?\s*", "", raw_title).strip()
+            content = str(parameters.get("content") or "").strip()
+            intent = str(parameters.get("intent") or content or "聚焦主题的关键问题").strip()
+            query = str(
+                parameters.get("query")
+                or f"{state.research_topic} {title}".strip()
+            ).strip()
+            recovered[task_id] = TodoItem(
+                id=task_id,
+                title=title or f"任务 {task_id}",
+                intent=intent,
+                query=query or state.research_topic,
+            )
+
+        return [recovered[task_id] for task_id in sorted(recovered)]
+
     # ------------------------------------------------------------------
     # Parsing helpers
     # ------------------------------------------------------------------
@@ -113,25 +150,24 @@ class PlanningService:
     def _extract_json_payload(self, text: str) -> Optional[dict[str, Any] | list]:
         """Try to locate and parse a JSON object or array from the text."""
 
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            candidate = text[start : end + 1]
+        decoder = json.JSONDecoder()
+        fallback: dict[str, Any] | list | None = None
+        for match in re.finditer(r"[\[{]", text):
             try:
-                return json.loads(candidate)
+                candidate, _ = decoder.raw_decode(text[match.start() :])
             except json.JSONDecodeError:
-                pass
+                continue
+            if not isinstance(candidate, (dict, list)):
+                continue
+            if isinstance(candidate, dict) and isinstance(candidate.get("tasks"), list):
+                return candidate
+            if isinstance(candidate, list) and all(
+                isinstance(item, dict) for item in candidate
+            ):
+                return candidate
+            fallback = fallback or candidate
 
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            candidate = text[start : end + 1]
-            try:
-                return json.loads(candidate)
-            except json.JSONDecodeError:
-                return None
-
-        return None
+        return fallback
 
     def _extract_tool_payload(self, text: str) -> Optional[dict[str, Any]]:
         """Parse the first TOOL_CALL expression in the output."""
